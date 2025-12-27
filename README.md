@@ -18,28 +18,46 @@ now_what_be/
 │       └── health_router.py   # Health check 라우터
 ├── main.py                    # FastAPI 애플리케이션 진입점
 ├── requirements.txt           # Python 패키지 의존성
+├── run_api_server.sh          # Conda 환경 자동 설정 및 서버 실행 스크립트
 ├── .env.example              # 환경 변수 예제
 └── README.md
 ```
 
 ## 설치 및 실행
 
-### 1. 가상환경 생성 및 활성화
+### 방법 1: 자동 스크립트 사용 (권장)
+
+Conda를 사용한 자동 환경 설정 및 서버 실행:
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # macOS/Linux
-# 또는
-venv\Scripts\activate  # Windows
+./run_api_server.sh
 ```
 
-### 2. 패키지 설치
+이 스크립트는 다음을 자동으로 수행합니다:
+- Conda 설치 확인
+- 가상환경 존재 여부 확인
+- 없으면 Python 3.10으로 가상환경 생성
+- 있으면 가상환경 활성화
+- LangGraph, LangChain 최신 버전 포함 패키지 설치
+- API 서버 실행
+
+### 방법 2: 수동 설정
+
+#### 1. Conda 가상환경 생성 및 활성화
+
+```bash
+# Python 3.10 이상으로 가상환경 생성
+conda create -n now_what_be_env python=3.10 -y
+conda activate now_what_be_env
+```
+
+#### 2. 패키지 설치
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 환경 변수 설정
+#### 3. 환경 변수 설정
 
 `.env.example` 파일을 참고하여 `.env` 파일을 생성하고 OpenAI API 키를 설정하세요.
 
@@ -48,7 +66,7 @@ cp .env.example .env
 # .env 파일을 열어 OPENAI_API_KEY를 설정
 ```
 
-### 4. 서버 실행
+#### 4. 서버 실행
 
 ```bash
 python main.py
