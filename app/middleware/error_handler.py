@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.exceptions import BaseAPIException, APIKeyError, AgentError, ConfigurationError, ValidationError
+from app.schemas.error import ErrorResponse, ValidationErrorResponse, ErrorDetail, ValidationErrorDetail
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +24,18 @@ async def base_exception_handler(request: Request, exc: BaseAPIException):
         }
     )
     
+    # Pydantic 모델을 사용한 에러 응답 생성
+    error_detail = ErrorDetail(
+        code=exc.error_code,
+        message=exc.message,
+        type=exc.__class__.__name__,
+        details=None
+    )
+    error_response = ErrorResponse(success=False, error=error_detail)
+    
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": {
-                "code": exc.error_code,
-                "message": exc.message,
-                "type": exc.__class__.__name__
-            }
-        }
+        content=error_response.model_dump()
     )
 
 
@@ -57,16 +60,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         }
     )
     
+    # Pydantic 모델을 사용한 검증 에러 응답 생성
+    error_detail = ValidationErrorDetail(
+        code="VALIDATION_ERROR",
+        message=error_message,
+        details=errors
+    )
+    error_response = ValidationErrorResponse(success=False, error=error_detail)
+    
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "success": False,
-            "error": {
-                "code": "VALIDATION_ERROR",
-                "message": error_message,
-                "details": errors
-            }
-        }
+        content=error_response.model_dump()
     )
 
 
@@ -81,16 +85,18 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         }
     )
     
+    # Pydantic 모델을 사용한 HTTP 에러 응답 생성
+    error_detail = ErrorDetail(
+        code=f"HTTP_{exc.status_code}",
+        message=exc.detail,
+        type="HTTPException",
+        details=None
+    )
+    error_response = ErrorResponse(success=False, error=error_detail)
+    
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": {
-                "code": f"HTTP_{exc.status_code}",
-                "message": exc.detail,
-                "type": "HTTPException"
-            }
-        }
+        content=error_response.model_dump()
     )
 
 
@@ -110,24 +116,28 @@ async def general_exception_handler(request: Request, exc: Exception):
     
     # 프로덕션 환경에서는 상세 에러 정보를 숨김
     error_message = "서버 내부 오류가 발생했습니다."
+    error_details = None
     try:
         # app.state에서 설정 가져오기 (없으면 기본값 사용)
         app_settings = getattr(request.app.state, 'settings', None)
         if app_settings and getattr(app_settings, 'debug', False):
             error_message = f"서버 내부 오류: {str(exc)}"
+            error_details = {"traceback": error_traceback}
     except Exception:
         # 설정 접근 실패 시 기본 메시지 사용
         pass
     
+    # Pydantic 모델을 사용한 일반 에러 응답 생성
+    error_detail = ErrorDetail(
+        code="INTERNAL_SERVER_ERROR",
+        message=error_message,
+        type=exc.__class__.__name__,
+        details=error_details
+    )
+    error_response = ErrorResponse(success=False, error=error_detail)
+    
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "success": False,
-            "error": {
-                "code": "INTERNAL_SERVER_ERROR",
-                "message": error_message,
-                "type": exc.__class__.__name__
-            }
-        }
+        content=error_response.model_dump()
     )
 
