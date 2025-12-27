@@ -29,10 +29,8 @@ eval "$(conda shell.bash hook)"
 
 # 가상 환경 존재 여부 확인
 if conda env list | grep -q "^${ENV_NAME}\s"; then
-    echo -e "${YELLOW}⚠ 가상 환경 '${ENV_NAME}'이(가) 이미 존재합니다.${NC}"
-    echo -e "${GREEN}가상 환경을 활성화합니다...${NC}"
+    echo -e "${GREEN}✓ 가상 환경 '${ENV_NAME}'을(를) 활성화합니다.${NC}"
 else
-    echo -e "${YELLOW}가상 환경 '${ENV_NAME}'이(가) 존재하지 않습니다.${NC}"
     echo -e "${GREEN}Python ${PYTHON_VERSION}로 가상 환경을 생성합니다...${NC}"
     
     # Python 3.10 이상으로 가상 환경 생성
@@ -47,7 +45,6 @@ else
 fi
 
 # 가상 환경 활성화
-echo -e "${GREEN}가상 환경 '${ENV_NAME}' 활성화 중...${NC}"
 conda activate "${ENV_NAME}"
 
 if [ $? -ne 0 ]; then
@@ -55,33 +52,51 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo -e "${GREEN}✓ 가상 환경이 활성화되었습니다.${NC}"
-
-# Python 버전 확인
-PYTHON_VER=$(python --version 2>&1 | awk '{print $2}')
-echo -e "${GREEN}현재 Python 버전: ${PYTHON_VER}${NC}"
-
 # 프로젝트 디렉토리로 이동
 cd "${PROJECT_DIR}" || exit 1
 
-# .env 파일 존재 확인
+# .env 파일 존재 확인 (경고만 표시, 서버는 실행 가능)
 if [ ! -f ".env" ]; then
-    echo -e "${YELLOW}⚠ .env 파일이 존재하지 않습니다.${NC}"
-    if [ -f ".env.example" ]; then
-        echo -e "${YELLOW}.env.example 파일을 참고하여 .env 파일을 생성하세요.${NC}"
-    fi
+    echo -e "${YELLOW}⚠ .env 파일이 존재하지 않습니다. (선택사항)${NC}"
 fi
 
-# pip 업그레이드
-echo -e "${GREEN}pip를 최신 버전으로 업그레이드합니다...${NC}"
-pip install --upgrade pip --quiet
+# requirements.txt 확인
+if [ ! -f "requirements.txt" ]; then
+    echo -e "${RED}❌ requirements.txt 파일을 찾을 수 없습니다.${NC}"
+    exit 1
+fi
 
-# requirements.txt 설치
-if [ -f "requirements.txt" ]; then
+# 패키지 설치 필요 여부 확인
+# 핵심 패키지가 설치되어 있는지 확인
+NEED_INSTALL=false
+if ! pip show fastapi &>/dev/null || ! pip show uvicorn &>/dev/null || ! pip show langgraph &>/dev/null || ! pip show langchain &>/dev/null; then
+    NEED_INSTALL=true
+else
+    # requirements.txt의 패키지와 설치된 패키지 비교
+    # pip freeze와 requirements.txt를 비교하여 누락된 패키지 확인
+    INSTALLED=$(pip freeze 2>/dev/null | cut -d'=' -f1 | tr '[:upper:]' '[:lower:]')
+    while IFS= read -r line; do
+        # 주석과 빈 줄 제외
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        
+        # 패키지 이름 추출 (버전 정보 제거)
+        package_name=$(echo "$line" | sed 's/[<>=!].*//' | sed 's/\[.*\]//' | xargs | tr '[:upper:]' '[:lower:]')
+        
+        if [ -n "$package_name" ]; then
+            # 설치된 패키지 목록에 없으면 설치 필요
+            if ! echo "$INSTALLED" | grep -q "^${package_name}$"; then
+                NEED_INSTALL=true
+                break
+            fi
+        fi
+    done < requirements.txt
+fi
+
+# 패키지 설치 (필요한 경우에만)
+if [ "$NEED_INSTALL" = true ]; then
     echo -e "${GREEN}필요한 패키지를 설치합니다...${NC}"
-    echo -e "${YELLOW}(LangGraph, LangChain 최신 버전 포함)${NC}"
-    
-    pip install -r requirements.txt
+    pip install -r requirements.txt --quiet
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 패키지 설치에 실패했습니다.${NC}"
@@ -90,15 +105,8 @@ if [ -f "requirements.txt" ]; then
     
     echo -e "${GREEN}✓ 패키지 설치가 완료되었습니다.${NC}"
 else
-    echo -e "${RED}❌ requirements.txt 파일을 찾을 수 없습니다.${NC}"
-    exit 1
+    echo -e "${GREEN}✓ 필요한 패키지가 모두 설치되어 있습니다.${NC}"
 fi
-
-# 설치된 주요 패키지 버전 확인
-echo -e "${GREEN}설치된 주요 패키지 버전:${NC}"
-python -c "import langgraph; print(f'  LangGraph: {langgraph.__version__}')" 2>/dev/null || echo "  LangGraph: 확인 불가"
-python -c "import langchain; print(f'  LangChain: {langchain.__version__}')" 2>/dev/null || echo "  LangChain: 확인 불가"
-python -c "import fastapi; print(f'  FastAPI: {fastapi.__version__}')" 2>/dev/null || echo "  FastAPI: 확인 불가"
 
 # API 서버 실행
 echo -e "${GREEN}========================================${NC}"
