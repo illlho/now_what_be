@@ -18,15 +18,21 @@ from app.middleware.error_handler import (
     http_exception_handler,
     general_exception_handler
 )
+from app.middleware.logging_middleware import LoggingMiddleware
 
-# 로깅 설정
+# 로깅 설정 (환경 변수 LOG_LEVEL 사용, 없으면 ERROR)
+log_level = settings.get_log_level()
 logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
 logger = logging.getLogger(__name__)
+
+# 로그 레벨 정보 출력
+log_level_name = logging.getLevelName(log_level)
+logger.info(f"로그 레벨: {log_level_name} (LOG_LEVEL={settings.log_level or '미설정 (기본값: ERROR)'})")
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -39,6 +45,9 @@ app = FastAPI(
 
 # 설정을 app state에 저장 (에러 핸들러에서 사용)
 app.state.settings = settings
+
+# 로깅 미들웨어 등록 (가장 먼저 실행되도록)
+app.add_middleware(LoggingMiddleware)
 
 # CORS 허용 오리진 설정
 # 참고: Postman, cURL 등 브라우저가 아닌 도구는 CORS 정책의 영향을 받지 않습니다.

@@ -59,12 +59,35 @@ pip install -r requirements.txt
 
 #### 3. 환경 변수 설정
 
-`.env.example` 파일을 참고하여 `.env` 파일을 생성하고 OpenAI API 키를 설정하세요.
+`.env` 파일을 생성하고 필요한 환경 변수를 설정하세요.
 
 ```bash
-cp .env.example .env
-# .env 파일을 열어 OPENAI_API_KEY를 설정
+# .env 파일 생성
+touch .env
 ```
+
+`.env` 파일 예시:
+```env
+# OpenAI API Key
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Server Configuration
+HOST=0.0.0.0
+PORT=8000
+DEBUG=True
+
+# Log Level Configuration
+# 가능한 값: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# 값이 없거나 유효하지 않으면 ERROR 레벨이 기본값으로 사용됩니다.
+LOG_LEVEL=ERROR
+```
+
+**로그 레벨 설명:**
+- `DEBUG`: 모든 로그 출력 (개발 환경)
+- `INFO`: 정보성 로그 이상 출력 (기본 운영 환경)
+- `WARNING`: 경고 로그 이상 출력
+- `ERROR`: 에러 로그만 출력 (기본값, 값이 없을 때)
+- `CRITICAL`: 치명적 에러만 출력
 
 #### 4. 서버 실행
 
