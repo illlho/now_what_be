@@ -6,6 +6,7 @@ import operator
 import logging
 from app.config import settings
 from app.exceptions import APIKeyError, AgentError
+from app.constants.error_codes import ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ class LangGraphAgent:
                 raise APIKeyError(
                     "OPENAI_API_KEY가 설정되지 않았습니다. "
                     ".env 파일을 생성하고 OPENAI_API_KEY를 설정하세요. "
-                    ".env.example 파일을 참고하세요."
+                    ".env.example 파일을 참고하세요.",
+                    error_code=ErrorCode.API_KEY_MISSING
                 )
             
             logger.info("LangGraph Agent 초기화 중...")
@@ -56,7 +58,10 @@ class LangGraphAgent:
             raise
         except Exception as e:
             logger.error(f"Agent 초기화 실패: {str(e)}", exc_info=True)
-            raise AgentError(f"Agent 초기화 중 오류가 발생했습니다: {str(e)}")
+            raise AgentError(
+                f"Agent 초기화 중 오류가 발생했습니다: {str(e)}",
+                error_code=ErrorCode.AGENT_INIT_FAILED
+            )
     
     def _build_graph(self) -> StateGraph:
         """LangGraph 그래프 구성"""
@@ -88,7 +93,10 @@ class LangGraphAgent:
             state["response"] = response.content if hasattr(response, 'content') else str(response)
         except Exception as e:
             logger.error(f"LLM 호출 실패: {str(e)}", exc_info=True)
-            raise AgentError(f"AI 응답 생성 중 오류가 발생했습니다: {str(e)}")
+            raise AgentError(
+                f"AI 응답 생성 중 오류가 발생했습니다: {str(e)}",
+                error_code=ErrorCode.AGENT_LLM_ERROR
+            )
         
         return state
     
@@ -113,7 +121,10 @@ class LangGraphAgent:
             raise
         except Exception as e:
             logger.error(f"Agent 처리 실패: {str(e)}", exc_info=True)
-            raise AgentError(f"Agent 처리 중 오류가 발생했습니다: {str(e)}")
+            raise AgentError(
+                f"Agent 처리 중 오류가 발생했습니다: {str(e)}",
+                error_code=ErrorCode.AGENT_PROCESSING_FAILED
+            )
 
 
 # 싱글톤 인스턴스 (Lazy initialization)

@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.exceptions import BaseAPIException, APIKeyError, AgentError, ConfigurationError, ValidationError
 from app.schemas.error import ErrorResponse, ValidationErrorResponse, ErrorDetail, ValidationErrorDetail
+from app.constants.error_codes import ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     
     # Pydantic 모델을 사용한 검증 에러 응답 생성
     error_detail = ValidationErrorDetail(
-        code="VALIDATION_ERROR",
+        code=ErrorCode.VALIDATION_ERROR,
         message=error_message,
         details=errors
     )
@@ -87,7 +88,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     
     # Pydantic 모델을 사용한 HTTP 에러 응답 생성
     error_detail = ErrorDetail(
-        code=f"HTTP_{exc.status_code}",
+        code=ErrorCode.http_error(exc.status_code),
         message=exc.detail,
         type="HTTPException",
         details=None
@@ -129,7 +130,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     
     # Pydantic 모델을 사용한 일반 에러 응답 생성
     error_detail = ErrorDetail(
-        code="INTERNAL_SERVER_ERROR",
+        code=ErrorCode.INTERNAL_SERVER_ERROR,
         message=error_message,
         type=exc.__class__.__name__,
         details=error_details

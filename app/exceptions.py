@@ -1,5 +1,7 @@
 """커스텀 예외 클래스"""
 
+from app.constants.error_codes import ErrorCode
+
 
 class BaseAPIException(Exception):
     """기본 API 예외 클래스"""
@@ -16,27 +18,27 @@ class ConfigurationError(BaseAPIException):
         super().__init__(
             message=message,
             status_code=500,
-            error_code="CONFIGURATION_ERROR"
+            error_code=ErrorCode.CONFIGURATION_ERROR
         )
 
 
 class APIKeyError(BaseAPIException):
     """API 키 관련 에러"""
-    def __init__(self, message: str = "API 키가 설정되지 않았습니다."):
+    def __init__(self, message: str = "API 키가 설정되지 않았습니다.", error_code: str = None):
         super().__init__(
             message=message,
             status_code=503,
-            error_code="API_KEY_ERROR"
+            error_code=error_code or ErrorCode.API_KEY_ERROR
         )
 
 
 class AgentError(BaseAPIException):
     """Agent 처리 관련 에러"""
-    def __init__(self, message: str, status_code: int = 500):
+    def __init__(self, message: str, status_code: int = 500, error_code: str = None):
         super().__init__(
             message=message,
             status_code=status_code,
-            error_code="AGENT_ERROR"
+            error_code=error_code or ErrorCode.AGENT_ERROR
         )
 
 
@@ -46,6 +48,6 @@ class ValidationError(BaseAPIException):
         super().__init__(
             message=message,
             status_code=400,
-            error_code="VALIDATION_ERROR"
+            error_code=ErrorCode.VALIDATION_ERROR
         )
 
