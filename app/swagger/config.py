@@ -15,6 +15,10 @@ TAGS_METADATA = [
         "name": "agent",
         "description": "LangGraph를 활용한 AI Agent 관련 엔드포인트. AI 대화 및 텍스트 분석 기능을 제공합니다.",
     },
+    {
+        "name": "orchestration",
+        "description": "여러 Agent 작업을 조율하고 워크플로우를 관리하는 오케스트레이션 엔드포인트. 순차/병렬 작업 실행, 배치 처리 등을 지원합니다.",
+    },
 ]
 
 # 서버 정보 설정
