@@ -34,13 +34,30 @@ logger = logging.getLogger(__name__)
 log_level_name = logging.getLevelName(log_level)
 logger.info(f"로그 레벨: {log_level_name} (LOG_LEVEL={settings.log_level or '미설정 (기본값: ERROR)'})")
 
+# Swagger 설정 import
+from app.swagger.config import TAGS_METADATA, SERVERS, custom_openapi, custom_swagger_ui_html
+
 # FastAPI 앱 생성
 app = FastAPI(
     title="Now What Backend API",
-    description="LangGraph를 활용한 AI Agent 백엔드 서비스",
+    description="""
+    LangGraph를 활용한 AI Agent 백엔드 서비스
+    
+    ## 주요 기능
+    
+    * **AI Agent 대화**: LangGraph 기반 AI Agent와 실시간 대화
+    * **텍스트 분석**: 입력된 텍스트의 분석 및 처리
+    * **Health Check**: 서비스 상태 모니터링
+    
+    ## 인증
+    
+    현재는 인증이 필요하지 않습니다.
+    """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    openapi_tags=TAGS_METADATA,
+    servers=SERVERS,
 )
 
 # 설정을 app state에 저장 (에러 핸들러에서 사용)
@@ -83,6 +100,16 @@ app.add_exception_handler(Exception, general_exception_handler)
 # 라우터 등록
 app.include_router(health_router.router)
 app.include_router(agent_router.router)
+
+
+# Swagger UI 커스터마이징 적용
+app.openapi = lambda: custom_openapi(app)
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui_html():
+    """커스터마이징된 Swagger UI HTML"""
+    return custom_swagger_ui_html(app)
 
 
 @app.on_event("startup")
