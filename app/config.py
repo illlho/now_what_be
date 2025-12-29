@@ -1,5 +1,6 @@
 import logging
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from typing import Optional, Literal
 from app.exceptions import APIKeyError
 
@@ -11,14 +12,18 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 class Settings(BaseSettings):
     """애플리케이션 설정"""
     openai_api_key: Optional[str] = None
+    naver_client_id: Optional[str] = None
+    naver_client_secret: Optional[str] = None
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True
     log_level: Optional[str] = None  # 환경 변수에서 읽어옴
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"  # 정의되지 않은 필드는 무시
+    )
     
     def get_log_level(self) -> int:
         """로그 레벨을 반환 (기본값: ERROR)"""
