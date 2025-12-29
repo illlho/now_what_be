@@ -24,7 +24,7 @@ class WorkflowState(TypedDict):
     """워크플로우 상태 정의"""
     user_query: str  # 사용자 쿼리
     current_step: str  # 현재 실행 중인 단계
-    result: str  # 최종 결과
+    result_dict: dict  # 최종 결과 (dict 형태)
     metadata: dict  # 추가 메타데이터
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class UserRequest(BaseModel):
 
 # 오케스트레이션 응답
 class OrchestrationResponse(BaseModel):
-    result: str
+    result_dict: dict = Field(..., description="평가 결과 (dict 형태)")
     query: str
     success: bool = True
 
@@ -62,23 +62,25 @@ async def start_foodie_workflow(request: UserRequest):
         initial_state: WorkflowState = {
             "user_query": request.query,
             "current_step": "workflow_start",
-            "result": "",
+            "result_dict": {},
             "metadata": {}
         }
 
         # 워크플로우 실행
         logger.info("워크플로우 실행 중...")
         result_state = await compiled_graph.ainvoke(initial_state)
+        
+        logger.info(f"워크플로우 결과: {result_state}")
 
         # 결과 추출
-        final_result = result_state.get("result", "")
+        final_result = result_state.get("result_dict", {})
         metadata = result_state.get("metadata", {})
         success = metadata.get("status") == "completed" if metadata else True
         
-        logger.info(f"워크플로우 완료: 성공={success}, 결과 길이={len(final_result)}")
+        logger.info(f"워크플로우 완료: 성공={success}, 결과 타입={type(final_result)}")
         
         return OrchestrationResponse(
-            result=final_result,
+            result_dict=final_result,
             query=request.query,
             success=success
         )
@@ -86,7 +88,7 @@ async def start_foodie_workflow(request: UserRequest):
         logger.error(f"워크플로우 실행 실패: {str(e)}", exc_info=True)
         
         return OrchestrationResponse(
-            result=f"워크플로우 실행 중 오류 발생: {str(e)}",
+            result_dict={"error": f"워크플로우 실행 중 오류 발생: {str(e)}"},
             query=request.query,
             success=False
         )
