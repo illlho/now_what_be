@@ -26,6 +26,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # 요청 정보 로깅
         client_ip = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
+        origin = request.headers.get("origin", "none")
         
         logger.info(
             f"[{request_id}] {request.method} {request.url.path}",
@@ -36,8 +37,16 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 "query_params": str(request.query_params),
                 "client_ip": client_ip,
                 "user_agent": user_agent,
+                "origin": origin,
             }
         )
+        
+        # OPTIONS 요청의 경우 Origin 헤더를 명시적으로 로깅
+        if request.method == "OPTIONS":
+            logger.debug(
+                f"[{request_id}] OPTIONS preflight request - Origin: {origin}",
+                extra={"request_id": request_id, "origin": origin}
+            )
         
         # 요청 본문 로깅 (선택적, 큰 요청은 제외)
         # 주의: body를 읽으면 스트림이 소비되므로, 실제로는 헤더 정보만 로깅
