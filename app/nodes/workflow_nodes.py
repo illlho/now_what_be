@@ -249,23 +249,33 @@ async def hybrid_search_node(state: WorkflowState) -> WorkflowState:
     """
     하이브리드 검색 노드
     
-    구현 필요 사항:
-    1. state에서 추출된 키워드 정보 가져오기
-    2. 하이브리드 검색 수행 (벡터 검색 + 키워드 검색)
-       - 벡터 검색: 의미 기반 검색 (임베딩 사용)
-       - 키워드 검색: 정확한 키워드 매칭
-       - 두 결과를 결합하여 최종 검색 결과 생성
-    3. 검색 결과를 구조화하여 저장
-       - documents: 검색된 문서 리스트
-       - scores: 각 문서의 관련성 점수
-       - search_metadata: 검색 메타데이터 (검색 시간, 결과 수 등)
-    4. state의 result_dict에 검색 결과 저장
-    5. steps에 현재 단계 추가 및 metadata 업데이트
+    현재는 검색 결과가 부족한 상태로 설정하여, 검색 결과 평가에서 'invalid'가 반환되도록 합니다.
+    추후 VectorDB 및 검색 엔진 연동 시 실제 검색 로직을 구현합니다.
     """
     logger.info("하이브리드 검색 노드 실행")
-    # TODO: 구현 필요
+    
+    # 검색 결과를 빈 상태로 저장 (invalid 반환을 위해)
+    # 추후 실제 검색 로직 구현 시 이 부분을 교체
+    result_dict = state.get("result_dict", {})
+    result_dict["search_results"] = {
+        "documents": [],  # 빈 문서 리스트
+        "scores": [],
+        "search_metadata": {
+            "result_count": 0,
+            "search_type": "hybrid",
+            "status": "no_results"
+        }
+    }
+    
+    # 상태 업데이트
     steps = state.get("steps", [])
     state["steps"] = steps + ["hybrid_search"]
+    state["result_dict"] = result_dict
+    state["metadata"] = {
+        "step": "hybrid_search",
+        "status": "completed"
+    }
+    
     return state
 
 
@@ -273,6 +283,10 @@ async def evaluate_search_results_node(state: WorkflowState) -> WorkflowState:
     """
     검색 결과 평가 노드
     
+    검색 결과를 평가하여 충분한지 판단합니다.
+    현재는 하이브리드 검색 결과가 빈 상태이므로 항상 'invalid'로 평가됩니다.
+    
+    TODO : 
     구현 필요 사항:
     1. state에서 검색 결과 가져오기
     2. LLM을 사용하여 검색 결과 평가
@@ -288,9 +302,33 @@ async def evaluate_search_results_node(state: WorkflowState) -> WorkflowState:
     5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("검색 결과 평가 노드 실행")
-    # TODO: 구현 필요
+    
+    result_dict = state.get("result_dict", {})
+    search_results = result_dict.get("search_results", {})
+    documents = search_results.get("documents", [])
+    result_count = search_results.get("search_metadata", {}).get("result_count", 0)
+    
+    # 검색 결과 평가 (현재는 빈 결과이므로 invalid로 설정)
+    is_relevant = len(documents) > 0
+    is_sufficient = result_count >= 3  # 최소 3개 이상의 문서 필요
+    
+    # 평가 결과 저장
+    result_dict["search_evaluation"] = {
+        "is_relevant": is_relevant,
+        "is_sufficient": is_sufficient,
+        "quality_score": 0.0 if not is_sufficient else 0.5,
+        "reasoning": f"검색 결과: {result_count}개 문서. {'충분함' if is_sufficient else '부족함'}"
+    }
+    
+    # 상태 업데이트
     steps = state.get("steps", [])
     state["steps"] = steps + ["evaluate_search_results"]
+    state["result_dict"] = result_dict
+    state["metadata"] = {
+        "step": "evaluate_search_results",
+        "status": "completed"
+    }
+    
     return state
 
 
@@ -436,21 +474,15 @@ def route_after_search_evaluation(state: WorkflowState) -> str:
     """
     검색 결과 평가 후 라우팅 함수
     
-    구현 필요 사항:
-    1. state에서 evaluate_search_results_node의 결과 가져오기
-    2. result_dict에서 평가 결과 확인
-       - is_relevant: 검색 결과가 질문과 연관성이 있는지
-       - is_sufficient: 문서 수가 충분한지
-       - quality_score: 검색 결과 품질 점수
-    3. 조건에 따라 분기
-       - is_relevant가 True이고 is_sufficient가 True면 "valid" 반환 (최종 응답 생성)
-       - 그 외의 경우 "invalid" 반환 (병렬 검색으로 이동)
-    4. 반환값: "valid" 또는 "invalid"
+    검색 결과 평가 결과에 따라 분기합니다.
+    - is_relevant가 True이고 is_sufficient가 True면 "valid" 반환 (최종 응답 생성)
+    - 그 외의 경우 "invalid" 반환 (병렬 검색으로 이동)
     """
     result_dict = state.get("result_dict", {})
-    # TODO: 구현 필요 - result_dict의 구조에 맞게 평가
-    is_relevant = result_dict.get("is_relevant", False)
-    is_sufficient = result_dict.get("is_sufficient", False)
+    search_evaluation = result_dict.get("search_evaluation", {})
+    
+    is_relevant = search_evaluation.get("is_relevant", False)
+    is_sufficient = search_evaluation.get("is_sufficient", False)
     
     if is_relevant and is_sufficient:
         return "valid"
