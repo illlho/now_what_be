@@ -223,8 +223,8 @@ async def start_foodie_workflow(request: UserRequest):
         
         # 초기 상태 설정
         initial_state: WorkflowState = {
-            "user_query": request.query,
-            "current_step": "evaluate_query",
+            "queries": [request.query],  # 0번 인덱스에 최초 사용자 입력
+            "steps": [],  # 빈 리스트로 시작 (첫 노드에서 추가됨)
             "result_dict": {},
             "metadata": {}
         }
