@@ -6,28 +6,148 @@ LangGraph 워크플로우에서 사용되는 노드 함수들을 정의합니다
 from __future__ import annotations
 
 import logging
-from app.utils.llm_utils import evaluate_user_input
+from app.utils.llm_utils import llm_call, LLMRequest, TokenUsageInfo, calculate_cost
 from app.schemas.workflow_state import WorkflowState
+from app.schemas.llm_response_models import QueryEvaluationResult
 
 logger = logging.getLogger(__name__)
 
 
+def _update_token_usage(state: WorkflowState, step_name: str, token_info: TokenUsageInfo) -> None:
+    """
+    WorkflowState의 토큰 사용량 리스트와 누적 값을 업데이트합니다.
+    
+    Args:
+        state: 워크플로우 상태
+        step_name: 현재 단계 이름
+        token_info: 토큰 사용량 정보
+    """
+    # token_usage_list 초기화 (없으면)
+    if "token_usage_list" not in state:
+        state["token_usage_list"] = []
+    
+    # 현재 노드의 토큰 사용량을 리스트에 추가
+    state["token_usage_list"].append({
+        "step": step_name,
+        "input_tokens": token_info.input_tokens,
+        "output_tokens": token_info.output_tokens,
+        "total_tokens": token_info.total_tokens,
+        "cost_krw": token_info.cost_krw,
+        "cost_formatted": token_info.cost_formatted
+    })
+    
+    # token_usage_total 초기화 (없으면)
+    if "token_usage_total" not in state:
+        state["token_usage_total"] = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_tokens": 0,
+            "total_cost_krw": 0.0,
+            "total_cost_formatted": "0.00원(0 tokens)"
+        }
+    
+    # 누적 값 업데이트
+    total = state["token_usage_total"]
+    total["total_input_tokens"] += token_info.input_tokens
+    total["total_output_tokens"] += token_info.output_tokens
+    total["total_tokens"] += token_info.total_tokens
+    total["total_cost_krw"] += token_info.cost_krw
+    
+    # 총 비용 포맷팅
+    total_cost_krw, total_cost_formatted = calculate_cost(
+        total["total_input_tokens"],
+        total["total_output_tokens"]
+    )
+    total["total_cost_krw"] = total_cost_krw
+    total["total_cost_formatted"] = total_cost_formatted
+
+
 # 노드 함수: 쿼리 평가
 async def evaluate_query_node(state: WorkflowState) -> WorkflowState:
-    user_query = state.get("user_query", "")
+    """
+    쿼리 평가 노드
+    
+    사용자 입력이 맛집 검색 서비스에 적합한지 판단합니다.
+    - 적합한 경우: 다음 노드(rewrite_query_and_extract_keywords)로 진행
+    - 부적절하거나 정보 부족한 경우: END로 이동하여 사용자에게 이유와 함께 반환
+    
+    이후 플로우:
+    - valid → rewrite_query_and_extract_keywords → hybrid_search → ...
+    - invalid → END (사용자에게 부족한 정보와 이유 반환)
+    """
+    # queries 리스트에서 최초 사용자 입력 가져오기 (0번 인덱스)
+    queries = state.get("queries", [])
+    if not queries:
+        logger.error("queries가 비어있습니다. 최소한 하나의 쿼리가 필요합니다.")
+        state["steps"] = state.get("steps", []) + ["evaluate_query"]
+        state["result_dict"] = {
+            "is_valid": False,
+            "is_inappropriate": False,
+            "missing_info": ["시스템 오류"],
+            "reasoning": "queries가 비어있습니다."
+        }
+        return state
+    
+    user_query = queries[0]  # 최초 사용자 입력
     
     logger.info(f"쿼리 평가 노드 실행: {user_query}")
     
-    result_dict = await evaluate_user_input(user_query)
-    logger.info(f"쿼리 평가 완료: {result_dict}")
+    # 시스템 프롬프트 (300자 이내 요약)
+    # 역할: 맛집 검색 서비스 적합성 판단 및 필수 정보 확인
+    system_prompt = """맛집 검색 쿼리 평가 전문 AI. 사용자 입력이 맛집 검색 서비스에 적합한지 판단: 1)맛집 관련성 체크(맛집/음식/식당 관련인지) 2)부적절성 검사(욕설/무관한 질문인지) 3)필수 정보 확인(위치/음식종류 존재 여부). 정보 부족시 부족한 항목과 이유 명시. JSON 응답: is_valid(다음 단계 진행 가능 여부), is_inappropriate(부적절 여부), missing_info(부족한 정보 리스트, 예:["위치","음식종류"]), location(있으면 추출), search_item(있으면 추출), reasoning(판단 이유). is_inappropriate=true면 is_valid=false."""
     
-    # 상태 업데이트
-    state["current_step"] = "evaluate_query"
-    state["result_dict"] = result_dict
-    state["metadata"] = {
-        "step": "evaluate_query",
-        "status": "completed"
+    # 사용자 프롬프트
+    user_prompt = f'다음 사용자 입력을 평가하고 JSON 형식으로 응답하세요:\n\n사용자 입력: "{user_query}"\n\n맛집 검색에 적합한지, 필요한 정보(위치, 음식 종류)가 충분한지 판단하세요. 부족하면 missing_info에 부족한 항목을 리스트로 명시하세요.'
+    
+    # LLM 호출 (with_structured_output 사용)
+    llm_request: LLMRequest = {
+        "user_prompt": user_prompt,
+        "system_prompt": system_prompt
     }
+    
+    try:
+        # Pydantic 모델로 구조화된 응답 받기 (토큰 정보 포함)
+        result, token_info = await llm_call(llm_request, QueryEvaluationResult)
+        logger.info(
+            f"쿼리 평가 완료: is_valid={result.is_valid}, missing_info={result.missing_info} | "
+            f"비용: {token_info.cost_formatted}"
+        )
+        
+        # is_valid와 is_inappropriate 일관성 확인
+        if result.is_inappropriate:
+            result.is_valid = False
+        
+        # Pydantic 모델을 dict로 변환하여 state에 저장
+        result_dict = result.model_dump()
+        
+        # 토큰 사용량 업데이트
+        _update_token_usage(state, "evaluate_query", token_info)
+        
+        # 상태 업데이트
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["evaluate_query"]
+        state["result_dict"] = result_dict
+        state["metadata"] = {
+            "step": "evaluate_query",
+            "status": "completed"
+        }
+    except Exception as e:
+        logger.error(f"쿼리 평가 실패: {str(e)}", exc_info=True)
+        # 에러 발생 시 기본값 설정 (invalid로 처리)
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["evaluate_query"]
+        state["result_dict"] = {
+            "is_valid": False,
+            "is_inappropriate": False,
+            "missing_info": ["시스템 오류"],
+            "location": None,
+            "search_item": None,
+            "reasoning": f"쿼리 평가 중 오류 발생: {str(e)}"
+        }
+        state["metadata"] = {
+            "step": "evaluate_query",
+            "status": "error"
+        }
     
     return state
 
@@ -41,7 +161,7 @@ async def rewrite_query_and_extract_keywords_node(state: WorkflowState) -> Workf
     쿼리 재작성 및 키워드 추출 노드
     
     구현 필요 사항:
-    1. state에서 user_query 또는 result_dict의 rewritten_query 추출
+    1. state에서 queries 리스트의 마지막 쿼리 또는 result_dict의 rewritten_query 추출
     2. LLM을 사용하여 검색에 최적화된 쿼리로 재작성
        - 불필요한 수식어 제거
        - 핵심 키워드 추출
@@ -51,11 +171,15 @@ async def rewrite_query_and_extract_keywords_node(state: WorkflowState) -> Workf
        - food_type: 음식 종류
        - keywords: 검색 키워드 리스트
     4. state의 result_dict에 재작성된 쿼리와 키워드 정보 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("쿼리 재작성 및 키워드 추출 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "rewrite_query_and_extract_keywords"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["rewrite_query_and_extract_keywords"]
+    # TODO: 재작성된 쿼리를 queries 리스트에 추가
+    # rewritten_query = ...
+    # state["queries"] = state.get("queries", []) + [rewritten_query]
     return state
 
 
@@ -74,11 +198,12 @@ async def hybrid_search_node(state: WorkflowState) -> WorkflowState:
        - scores: 각 문서의 관련성 점수
        - search_metadata: 검색 메타데이터 (검색 시간, 결과 수 등)
     4. state의 result_dict에 검색 결과 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("하이브리드 검색 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "hybrid_search"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["hybrid_search"]
     return state
 
 
@@ -98,11 +223,12 @@ async def evaluate_search_results_node(state: WorkflowState) -> WorkflowState:
        - quality_score: 품질 점수
        - reasoning: 평가 사고 과정
     4. state의 result_dict에 평가 결과 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("검색 결과 평가 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "evaluate_search_results"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["evaluate_search_results"]
     return state
 
 
@@ -121,11 +247,12 @@ async def generate_final_response_node(state: WorkflowState) -> WorkflowState:
        - restaurants: 추천 맛집 리스트 (있는 경우)
        - sources: 참고한 문서/소스 정보
     4. state의 result_dict에 최종 응답 저장
-    5. current_step과 metadata 업데이트 (status: "completed")
+    5. steps에 현재 단계 추가 및 metadata 업데이트 (status: "completed")
     """
     logger.info("최종 응답 생성 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "generate_final_response"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["generate_final_response"]
     state["metadata"]["status"] = "completed"
     return state
 
@@ -146,11 +273,12 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
        - web_search_results: 웹 검색 결과
        - combined_results: 통합 검색 결과
     4. state의 result_dict에 병렬 검색 결과 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("병렬 검색 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "parallel_search"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["parallel_search"]
     return state
 
 
@@ -170,11 +298,12 @@ async def evaluate_relevance_node(state: WorkflowState) -> WorkflowState:
        - needs_rewrite: 쿼리 재작성 필요 여부
        - reasoning: 평가 사고 과정
     4. state의 result_dict에 연관성 평가 결과 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     """
     logger.info("연관성 평가 노드 실행")
     # TODO: 구현 필요
-    state["current_step"] = "evaluate_relevance"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["evaluate_relevance"]
     return state
 
 
@@ -184,7 +313,7 @@ async def rewrite_query_with_context_node(state: WorkflowState) -> WorkflowState
     
     구현 필요 사항:
     1. state에서 다음 정보 가져오기
-       - 초기 질문 (user_query)
+       - 초기 질문 (queries[0])
        - 이전 검색 쿼리
        - 검색된 문서들
     2. LLM을 사용하여 컨텍스트를 고려한 쿼리 재작성
@@ -196,7 +325,7 @@ async def rewrite_query_with_context_node(state: WorkflowState) -> WorkflowState
        - rewrite_reason: 재작성 이유
        - extracted_keywords: 새로 추출된 키워드
     4. state의 result_dict에 재작성된 쿼리 저장
-    5. current_step과 metadata 업데이트
+    5. steps에 현재 단계 추가 및 metadata 업데이트
     6. 무한 루프 방지를 위한 재시도 카운터 확인 (metadata에 저장)
     """
     logger.info("컨텍스트 기반 쿼리 재작성 노드 실행")
@@ -204,7 +333,11 @@ async def rewrite_query_with_context_node(state: WorkflowState) -> WorkflowState
     # 무한 루프 방지: 재시도 카운터 확인
     retry_count = state.get("metadata", {}).get("rewrite_retry_count", 0)
     state["metadata"]["rewrite_retry_count"] = retry_count + 1
-    state["current_step"] = "rewrite_query_with_context"
+    steps = state.get("steps", [])
+    state["steps"] = steps + ["rewrite_query_with_context"]
+    # TODO: 재작성된 쿼리를 queries 리스트에 추가
+    # rewritten_query = ...
+    # state["queries"] = state.get("queries", []) + [rewritten_query]
     return state
 
 

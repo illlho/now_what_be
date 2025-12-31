@@ -6,7 +6,6 @@
 from typing import Optional
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
 import logging
 from dotenv import load_dotenv
 import os
@@ -14,8 +13,14 @@ load_dotenv(dotenv_path=".env", override=True)
 
 from langgraph.graph import StateGraph, END
 
-# 워크플로우 상태 정의 import
+# 스키마 import
 from app.schemas.workflow_state import WorkflowState
+from app.schemas.orchestration_models import (
+    UserRequest,
+    TokenUsageSummary,
+    OrchestrationResponse,
+    GraphVisualizationResponse,
+)
 
 # 노드 함수 import
 from app.nodes.workflow_nodes import (
@@ -38,20 +43,44 @@ from app.utils.llm_utils import LLMRequest, llm_call
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/orchestration", tags=["orchestration"])
 
-# 유저의 요청
-class UserRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="유저가 요청한 내용")
 
-# 오케스트레이션 응답
-class OrchestrationResponse(BaseModel):
-    result_dict: dict = Field(..., description="평가 결과 (dict 형태)")
-    query: str
-    success: bool = True
-
-# 그래프 시각화 응답
-class GraphVisualizationResponse(BaseModel):
-    mermaid_code: str = Field(..., description="Mermaid 다이어그램 코드")
-    ascii_art: str = Field(..., description="ASCII 아트 표현")
+def _aggregate_token_usage(result_state: WorkflowState) -> Optional[TokenUsageSummary]:
+    """
+    워크플로우 실행 결과에서 토큰 사용량을 집계합니다.
+    
+    Args:
+        result_state: 워크플로우 실행 결과 상태
+        
+    Returns:
+        토큰 사용량 요약 정보 (토큰 정보가 없으면 None)
+    """
+    # token_usage_total에서 누적 값 가져오기
+    token_usage_total = result_state.get("token_usage_total", {})
+    token_usage_list = result_state.get("token_usage_list", [])
+    
+    # 토큰 정보가 없으면 None 반환
+    if not token_usage_total or token_usage_total.get("total_tokens", 0) == 0:
+        return None
+    
+    # node_breakdown 생성 (token_usage_list에서)
+    node_breakdown = []
+    for usage in token_usage_list:
+        node_breakdown.append({
+            "step": usage.get("step", "unknown"),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+            "cost_formatted": usage.get("cost_formatted", "0.00원(0 tokens)")
+        })
+    
+    return TokenUsageSummary(
+        total_input_tokens=token_usage_total.get("total_input_tokens", 0),
+        total_output_tokens=token_usage_total.get("total_output_tokens", 0),
+        total_tokens=token_usage_total.get("total_tokens", 0),
+        total_cost_krw=token_usage_total.get("total_cost_krw", 0.0),
+        total_cost_formatted=token_usage_total.get("total_cost_formatted", "0.00원(0 tokens)"),
+        node_breakdown=node_breakdown
+    )
 
 
 def _build_graph() -> StateGraph:
@@ -226,7 +255,15 @@ async def start_foodie_workflow(request: UserRequest):
             "queries": [request.query],  # 0번 인덱스에 최초 사용자 입력
             "steps": [],  # 빈 리스트로 시작 (첫 노드에서 추가됨)
             "result_dict": {},
-            "metadata": {}
+            "metadata": {},
+            "token_usage_list": [],  # 각 노드별 토큰 사용량 리스트
+            "token_usage_total": {  # 누적 토큰 사용량 및 비용
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_tokens": 0,
+                "total_cost_krw": 0.0,
+                "total_cost_formatted": "0.00원(0 tokens)"
+            }
         }
 
         # 워크플로우 실행
@@ -240,12 +277,19 @@ async def start_foodie_workflow(request: UserRequest):
         metadata = result_state.get("metadata", {})
         success = metadata.get("status") == "completed" if metadata else True
         
-        logger.info(f"워크플로우 완료: 성공={success}, 결과 타입={type(final_result)}")
+        # 토큰 사용량 집계
+        token_usage_summary = _aggregate_token_usage(result_state)
+        
+        logger.info(
+            f"워크플로우 완료: 성공={success}, 결과 타입={type(final_result)} | "
+            f"총 비용: {token_usage_summary.total_cost_formatted if token_usage_summary else 'N/A'}"
+        )
         
         return OrchestrationResponse(
             result_dict=final_result,
             query=request.query,
-            success=success
+            success=success,
+            token_usage=token_usage_summary
         )
     except Exception as e:
         logger.error(f"워크플로우 실행 실패: {str(e)}", exc_info=True)
@@ -253,5 +297,6 @@ async def start_foodie_workflow(request: UserRequest):
         return OrchestrationResponse(
             result_dict={"error": f"워크플로우 실행 중 오류 발생: {str(e)}"},
             query=request.query,
-            success=False
+            success=False,
+            token_usage=None
         )

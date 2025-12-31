@@ -12,4 +12,6 @@ class WorkflowState(TypedDict):
     steps: list[str]  # 거쳐간 단계 리스트 (병렬 처리 시 여러 단계 저장)
     result_dict: dict  # 최종 결과 (dict 형태)
     metadata: dict  # 추가 메타데이터
+    token_usage_list: list[dict]  # 각 노드별 토큰 사용량 리스트
+    token_usage_total: dict  # 누적 토큰 사용량 및 비용 (total_input_tokens, total_output_tokens, total_tokens, total_cost_krw, total_cost_formatted)
 
