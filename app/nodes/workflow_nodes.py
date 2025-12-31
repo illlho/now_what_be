@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from app.utils.llm_utils import llm_call, LLMRequest, TokenUsageInfo, calculate_cost
 from app.schemas.workflow_state import WorkflowState
-from app.schemas.llm_response_models import QueryEvaluationResult
+from app.schemas.llm_response_models import QueryEvaluationResult, QueryRewriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -160,26 +160,88 @@ async def rewrite_query_and_extract_keywords_node(state: WorkflowState) -> Workf
     """
     쿼리 재작성 및 키워드 추출 노드
     
-    구현 필요 사항:
-    1. state에서 queries 리스트의 마지막 쿼리 또는 result_dict의 rewritten_query 추출
-    2. LLM을 사용하여 검색에 최적화된 쿼리로 재작성
-       - 불필요한 수식어 제거
-       - 핵심 키워드 추출
-       - 위치 정보와 음식 종류 분리
-    3. 추출된 키워드를 구조화된 형태로 저장
-       - location: 위치 정보
-       - food_type: 음식 종류
-       - keywords: 검색 키워드 리스트
-    4. state의 result_dict에 재작성된 쿼리와 키워드 정보 저장
-    5. steps에 현재 단계 추가 및 metadata 업데이트
+    사용자 쿼리를 검색에 최적화된 형태로 재작성하고, 위치, 음식 종류, 키워드를 추출합니다.
     """
-    logger.info("쿼리 재작성 및 키워드 추출 노드 실행")
-    # TODO: 구현 필요
-    steps = state.get("steps", [])
-    state["steps"] = steps + ["rewrite_query_and_extract_keywords"]
-    # TODO: 재작성된 쿼리를 queries 리스트에 추가
-    # rewritten_query = ...
-    # state["queries"] = state.get("queries", []) + [rewritten_query]
+    # queries 리스트에서 마지막 쿼리 가져오기 (없으면 result_dict에서)
+    queries = state.get("queries", [])
+    if queries:
+        original_query = queries[-1]  # 마지막 쿼리 사용
+    else:
+        # queries가 없으면 result_dict에서 가져오기 시도
+        result_dict = state.get("result_dict", {})
+        original_query = result_dict.get("rewritten_query") or state.get("queries", [""])[0] if state.get("queries") else ""
+    
+    if not original_query:
+        logger.error("재작성할 쿼리가 없습니다.")
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["rewrite_query_and_extract_keywords"]
+        state["result_dict"] = {
+            "error": "재작성할 쿼리가 없습니다."
+        }
+        return state
+    
+    logger.info(f"쿼리 재작성 및 키워드 추출 노드 실행: {original_query}")
+    
+    # 시스템 프롬프트 (300자 이내)
+    system_prompt = """맛집 검색 쿼리 재작성 전문 AI. 사용자 쿼리를 검색에 최적화: 1)불필요한 수식어 제거("맛있는","좋은" 등) 2)핵심 키워드 추출(위치, 음식종류) 3)검색 최적화된 간결한 쿼리 생성. JSON 응답: rewritten_query(재작성된 쿼리), location(위치), food_type(음식종류), keywords(키워드 리스트), reasoning(재작성 이유)."""
+    
+    # 사용자 프롬프트
+    user_prompt = f'다음 쿼리를 검색에 최적화된 형태로 재작성하고 키워드를 추출하세요:\n\n원본 쿼리: "{original_query}"\n\n불필요한 수식어를 제거하고, 위치와 음식 종류를 명확히 추출하여 검색에 최적화된 쿼리로 재작성하세요.'
+    
+    # LLM 호출
+    llm_request: LLMRequest = {
+        "user_prompt": user_prompt,
+        "system_prompt": system_prompt
+    }
+    
+    try:
+        # Pydantic 모델로 구조화된 응답 받기
+        result, token_info = await llm_call(llm_request, QueryRewriteResult)
+        logger.info(
+            f"쿼리 재작성 완료: rewritten_query={result.rewritten_query} | "
+            f"비용: {token_info.cost_formatted}"
+        )
+        
+        # 토큰 사용량 업데이트
+        _update_token_usage(state, "rewrite_query_and_extract_keywords", token_info)
+        
+        # 재작성된 쿼리를 queries 리스트에 추가
+        queries = state.get("queries", [])
+        state["queries"] = queries + [result.rewritten_query]
+        
+        # Pydantic 모델을 dict로 변환하여 state에 저장
+        result_dict = result.model_dump()
+        
+        # 기존 result_dict와 병합 (기존 정보 유지)
+        existing_result_dict = state.get("result_dict", {})
+        existing_result_dict.update(result_dict)
+        
+        # 상태 업데이트
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["rewrite_query_and_extract_keywords"]
+        state["result_dict"] = existing_result_dict
+        state["metadata"] = {
+            "step": "rewrite_query_and_extract_keywords",
+            "status": "completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"쿼리 재작성 실패: {str(e)}", exc_info=True)
+        # 에러 발생 시 원본 쿼리 사용
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["rewrite_query_and_extract_keywords"]
+        state["result_dict"] = {
+            "error": f"쿼리 재작성 중 오류 발생: {str(e)}",
+            "rewritten_query": original_query,  # 원본 쿼리 사용
+            "location": None,
+            "food_type": None,
+            "keywords": []
+        }
+        state["metadata"] = {
+            "step": "rewrite_query_and_extract_keywords",
+            "status": "error"
+        }
+    
     return state
 
 

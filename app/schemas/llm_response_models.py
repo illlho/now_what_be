@@ -20,3 +20,12 @@ class QueryEvaluationResult(BaseModel):
     search_item: Optional[str] = Field(None, description="추출된 음식 종류 (있으면)")
     reasoning: str = Field(..., description="판단 이유")
 
+
+class QueryRewriteResult(BaseModel):
+    """쿼리 재작성 및 키워드 추출 결과 모델"""
+    rewritten_query: str = Field(..., description="검색에 최적화된 재작성된 쿼리")
+    location: Optional[str] = Field(None, description="추출된 위치 정보")
+    food_type: Optional[str] = Field(None, description="추출된 음식 종류")
+    keywords: list[str] = Field(default_factory=list, description="검색 키워드 리스트")
+    reasoning: str = Field(..., description="재작성 이유 및 키워드 추출 과정")
+
