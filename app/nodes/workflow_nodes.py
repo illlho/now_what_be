@@ -5,6 +5,7 @@ LangGraph 워크플로우에서 사용되는 노드 함수들을 정의합니다
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from app.utils.llm_utils import llm_call, LLMRequest, TokenUsageInfo, calculate_cost
 from app.schemas.workflow_state import WorkflowState
@@ -359,26 +360,148 @@ async def generate_final_response_node(state: WorkflowState) -> WorkflowState:
 
 async def parallel_search_node(state: WorkflowState) -> WorkflowState:
     """
-    병렬 검색 노드 (네이버지도, 네이버블로그, 웹 검색)
+    병렬 검색 노드 (네이버지도, 네이버블로그, 덕덕고 웹 검색)
     
-    구현 필요 사항:
-    1. state에서 검색 쿼리 가져오기
-    2. 세 가지 검색 소스를 병렬로 검색
-       - 네이버지도 API: 지도 기반 맛집 검색
-       - 네이버블로그 API: 블로그 리뷰 검색
-       - 웹 검색 API: 일반 웹 검색
-    3. 각 검색 결과를 병합하여 저장
-       - naver_map_results: 네이버지도 검색 결과
-       - naver_blog_results: 네이버블로그 검색 결과
-       - web_search_results: 웹 검색 결과
-       - combined_results: 통합 검색 결과
-    4. state의 result_dict에 병렬 검색 결과 저장
-    5. steps에 현재 단계 추가 및 metadata 업데이트
+    세 가지 검색 소스를 병렬로 검색하여 결과를 통합합니다.
     """
     logger.info("병렬 검색 노드 실행")
-    # TODO: 구현 필요
+    
+    # 검색 쿼리 가져오기 (queries 리스트의 마지막 쿼리 또는 result_dict에서)
+    queries = state.get("queries", [])
+    result_dict = state.get("result_dict", {})
+    
+    # 검색 쿼리 결정: queries의 마지막 쿼리 또는 result_dict의 rewritten_query
+    search_queries = []
+    if queries:
+        # queries 리스트의 마지막 쿼리 사용
+        search_queries = [queries[-1]]
+    elif result_dict.get("rewritten_query"):
+        search_queries = [result_dict["rewritten_query"]]
+    else:
+        logger.warning("검색할 쿼리가 없습니다.")
+        steps = state.get("steps", [])
+        state["steps"] = steps + ["parallel_search"]
+        state["result_dict"] = {
+            **result_dict,
+            "parallel_search_results": {
+                "naver_map_results": {"queries": [], "count": 0, "hits": []},
+                "naver_blog_results": {"queries": [], "count": 0, "hits": []},
+                "web_search_results": {"queries": [], "count": 0, "hits": []},
+                "combined_results": []
+            }
+        }
+        return state
+    
+    # 검색 함수 import
+    from app.utils.search.naver_blog_search import search_naver_blog
+    from app.utils.search.naver_map_search import search_naver_map
+    from app.utils.search.duckduckgo_search import search_duckduckgo
+    
+    try:
+        # 세 가지 검색 소스를 병렬로 실행
+        naver_blog_task = search_naver_blog(search_queries)
+        naver_map_task = search_naver_map(search_queries)
+        duckduckgo_search_task = search_duckduckgo(search_queries)
+        
+        # 병렬 실행
+        naver_blog_result, naver_map_result, duckduckgo_search_result = await asyncio.gather(
+            naver_blog_task,
+            naver_map_task,
+            duckduckgo_search_task,
+            return_exceptions=True
+        )
+        
+        # 예외 처리
+        if isinstance(naver_blog_result, Exception):
+            logger.error(f"네이버 블로그 검색 실패: {str(naver_blog_result)}")
+            naver_blog_result = {"queries": search_queries, "count": 0, "hits": []}
+        
+        if isinstance(naver_map_result, Exception):
+            logger.error(f"네이버 지도 검색 실패: {str(naver_map_result)}")
+            naver_map_result = {"queries": search_queries, "count": 0, "hits": []}
+        
+        if isinstance(duckduckgo_search_result, Exception):
+            logger.error(f"DuckDuckGo 검색 실패: {str(duckduckgo_search_result)}")
+            duckduckgo_search_result = {"queries": search_queries, "count": 0, "hits": []}
+        
+        # 검색 결과 통합
+        combined_results = []
+        
+        # 네이버 지도 결과 추가
+        if naver_map_result.get("hits"):
+            combined_results.extend([
+                {
+                    "source": "naver_map",
+                    "title": hit.get("title", ""),
+                    "link": hit.get("link"),
+                    "category": hit.get("category"),
+                    "description": hit.get("description"),
+                    "telephone": hit.get("telephone"),
+                    "address": hit.get("address"),
+                    "roadAddress": hit.get("roadAddress"),
+                }
+                for hit in naver_map_result["hits"]
+            ])
+        
+        # 네이버 블로그 결과 추가
+        if naver_blog_result.get("hits"):
+            combined_results.extend([
+                {
+                    "source": "naver_blog",
+                    "title": hit.get("title", ""),
+                    "link": hit.get("link", ""),
+                    "description": hit.get("description", ""),
+                    "bloggername": hit.get("bloggername"),
+                    "postdate": hit.get("postdate"),
+                }
+                for hit in naver_blog_result["hits"]
+            ])
+        
+        # DuckDuckGo 검색 결과 추가
+        if duckduckgo_search_result.get("hits"):
+            combined_results.extend([
+                {
+                    "source": "duckduckgo",
+                    **hit
+                }
+                for hit in duckduckgo_search_result["hits"]
+            ])
+        
+        # 결과 저장
+        result_dict["parallel_search_results"] = {
+            "naver_map_results": naver_map_result,
+            "naver_blog_results": naver_blog_result,
+            "duckduckgo_search_results": duckduckgo_search_result,
+            "combined_results": combined_results
+        }
+        
+        logger.info(
+            f"병렬 검색 완료: "
+            f"지도={naver_map_result.get('count', 0)}개, "
+            f"블로그={naver_blog_result.get('count', 0)}개, "
+            f"DuckDuckGo={duckduckgo_search_result.get('count', 0)}개"
+        )
+        
+    except Exception as e:
+        logger.error(f"병렬 검색 실패: {str(e)}", exc_info=True)
+        # 에러 발생 시 빈 결과 저장
+        result_dict["parallel_search_results"] = {
+            "naver_map_results": {"queries": search_queries, "count": 0, "hits": []},
+            "naver_blog_results": {"queries": search_queries, "count": 0, "hits": []},
+            "duckduckgo_search_results": {"queries": search_queries, "count": 0, "hits": []},
+            "combined_results": [],
+            "error": f"병렬 검색 중 오류 발생: {str(e)}"
+        }
+    
+    # 상태 업데이트
     steps = state.get("steps", [])
     state["steps"] = steps + ["parallel_search"]
+    state["result_dict"] = result_dict
+    state["metadata"] = {
+        "step": "parallel_search",
+        "status": "completed"
+    }
+    
     return state
 
 
