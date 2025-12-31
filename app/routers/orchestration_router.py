@@ -3,8 +3,9 @@
 여러 Agent 작업을 조율하고 워크플로우를 관리하는 중앙 라우터
 """
 
-from typing import Optional, TypedDict
+from typing import Optional
 from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import logging
 from dotenv import load_dotenv
@@ -13,19 +14,26 @@ load_dotenv(dotenv_path=".env", override=True)
 
 from langgraph.graph import StateGraph, END
 
+# 워크플로우 상태 정의 import
+from app.schemas.workflow_state import WorkflowState
+
 # 노드 함수 import
-from app.nodes.workflow_nodes import evaluate_query_node
+from app.nodes.workflow_nodes import (
+    evaluate_query_node,
+    rewrite_query_and_extract_keywords_node,
+    hybrid_search_node,
+    evaluate_search_results_node,
+    generate_final_response_node,
+    parallel_search_node,
+    evaluate_relevance_node,
+    rewrite_query_with_context_node,
+    route_after_query_evaluation,
+    route_after_search_evaluation,
+    route_after_relevance_evaluation,
+)
 
 # 유틸리티 함수 import
 from app.utils.llm_utils import LLMRequest, llm_call
-
-# 워크플로우 상태 정의
-class WorkflowState(TypedDict):
-    """워크플로우 상태 정의"""
-    user_query: str  # 사용자 쿼리
-    current_step: str  # 현재 실행 중인 단계
-    result_dict: dict  # 최종 결과 (dict 형태)
-    metadata: dict  # 추가 메타데이터
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/orchestration", tags=["orchestration"])
@@ -40,20 +48,175 @@ class OrchestrationResponse(BaseModel):
     query: str
     success: bool = True
 
+# 그래프 시각화 응답
+class GraphVisualizationResponse(BaseModel):
+    mermaid_code: str = Field(..., description="Mermaid 다이어그램 코드")
+    ascii_art: str = Field(..., description="ASCII 아트 표현")
+
+
+def _build_graph() -> StateGraph:
+    """워크플로우 그래프 생성 (재사용 가능하도록 분리)"""
+    graph = StateGraph(WorkflowState)
+    
+    # 노드 추가
+    graph.add_node("evaluate_query", evaluate_query_node)  # 쿼리 평가
+    graph.add_node("rewrite_query_and_extract_keywords", rewrite_query_and_extract_keywords_node)  # 쿼리 재작성 및 키워드 추출
+    graph.add_node("hybrid_search", hybrid_search_node)  # 하이브리드 검색
+    graph.add_node("evaluate_search_results", evaluate_search_results_node)  # 검색 결과 평가
+    graph.add_node("generate_final_response", generate_final_response_node)  # 최종 응답 생성
+    graph.add_node("parallel_search", parallel_search_node)  # 병렬 검색 (네이버지도, 블로그, 웹)
+    graph.add_node("evaluate_relevance", evaluate_relevance_node)  # 연관성 평가
+    graph.add_node("rewrite_query_with_context", rewrite_query_with_context_node)  # 컨텍스트 기반 쿼리 재작성
+    
+    # 엔트리 포인트 설정
+    graph.set_entry_point("evaluate_query")
+    
+    # 엣지 추가
+    # 1. 쿼리 평가 후 분기
+    graph.add_conditional_edges(
+        "evaluate_query",
+        route_after_query_evaluation,
+        {
+            "valid": "rewrite_query_and_extract_keywords",
+            "invalid": END
+        }
+    )
+    
+    # 2. 쿼리 재작성 → 하이브리드 검색
+    graph.add_edge("rewrite_query_and_extract_keywords", "hybrid_search")
+    
+    # 3. 하이브리드 검색 → 검색 결과 평가
+    graph.add_edge("hybrid_search", "evaluate_search_results")
+    
+    # 4. 검색 결과 평가 후 분기
+    graph.add_conditional_edges(
+        "evaluate_search_results",
+        route_after_search_evaluation,
+        {
+            "valid": "generate_final_response",
+            "invalid": "parallel_search"
+        }
+    )
+    
+    # 5. 병렬 검색 → 연관성 평가
+    graph.add_edge("parallel_search", "evaluate_relevance")
+    
+    # 6. 연관성 평가 후 분기
+    graph.add_conditional_edges(
+        "evaluate_relevance",
+        route_after_relevance_evaluation,
+        {
+            "rewrite": "rewrite_query_with_context",
+            "valid": "generate_final_response"
+        }
+    )
+    
+    # 7. 컨텍스트 기반 쿼리 재작성 → 병렬 검색 (루프)
+    graph.add_edge("rewrite_query_with_context", "parallel_search")
+    
+    # 8. 최종 응답 생성 → 종료
+    graph.add_edge("generate_final_response", END)
+    
+    return graph
+
+@router.get("/graph-visualization/html", response_class=HTMLResponse, summary="워크플로우 그래프 HTML 뷰어")
+async def get_graph_visualization_html():
+    """
+    워크플로우 그래프를 HTML 페이지로 시각화합니다.
+    Mermaid.js를 사용하여 브라우저에서 바로 확인할 수 있습니다.
+    """
+    try:
+        # 그래프 생성
+        graph = _build_graph()
+        
+        # 그래프 컴파일
+        compiled_graph = graph.compile()
+        
+        # Mermaid 다이어그램 생성
+        mermaid_code = compiled_graph.get_graph().draw_mermaid()
+        
+        # HTML 템플릿 생성
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>워크플로우 그래프 시각화</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        h1 {{
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }}
+        .mermaid {{
+            text-align: center;
+            margin: 20px 0;
+        }}
+        .info {{
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }}
+        .code-block {{
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="mermaid">
+            {mermaid_code}
+        </div>
+    </div>
+</body>
+</html>
+        """
+        
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"그래프 HTML 시각화 실패: {str(e)}", exc_info=True)
+        error_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>오류 발생</title>
+</head>
+<body>
+    <h1>그래프 시각화 중 오류 발생</h1>
+    <p>{str(e)}</p>
+</body>
+</html>
+        """
+        return HTMLResponse(content=error_html, status_code=500)
+
+
 @router.post("/start-foodie-workflow", response_model=OrchestrationResponse, summary="맛집 탐색 워크플로우 시작")
 async def start_foodie_workflow(request: UserRequest):
     try:
         # 그래프 생성
-        graph = StateGraph(WorkflowState)
-        
-        # 노드 추가
-        graph.add_node("workflow_start", evaluate_query_node)
-        
-        # 엔트리 포인트 설정
-        graph.set_entry_point("workflow_start")
-
-        # 엣지 추가
-        graph.add_edge("workflow_start", END)
+        graph = _build_graph()
 
         # 그래프 컴파일
         compiled_graph = graph.compile()
@@ -61,7 +224,7 @@ async def start_foodie_workflow(request: UserRequest):
         # 초기 상태 설정
         initial_state: WorkflowState = {
             "user_query": request.query,
-            "current_step": "workflow_start",
+            "current_step": "evaluate_query",
             "result_dict": {},
             "metadata": {}
         }

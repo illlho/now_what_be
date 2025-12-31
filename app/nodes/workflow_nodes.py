@@ -5,13 +5,9 @@ LangGraph 워크플로우에서 사용되는 노드 함수들을 정의합니다
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 import logging
 from app.utils.llm_utils import evaluate_user_input
-
-# 순환 import 방지를 위한 TYPE_CHECKING 사용
-if TYPE_CHECKING:
-    from app.routers.orchestration_router import WorkflowState
+from app.schemas.workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -35,3 +31,271 @@ async def evaluate_query_node(state: WorkflowState) -> WorkflowState:
     
     return state
 
+
+# ============================================================================
+# 노드 함수들
+# ============================================================================
+
+async def rewrite_query_and_extract_keywords_node(state: WorkflowState) -> WorkflowState:
+    """
+    쿼리 재작성 및 키워드 추출 노드
+    
+    구현 필요 사항:
+    1. state에서 user_query 또는 result_dict의 rewritten_query 추출
+    2. LLM을 사용하여 검색에 최적화된 쿼리로 재작성
+       - 불필요한 수식어 제거
+       - 핵심 키워드 추출
+       - 위치 정보와 음식 종류 분리
+    3. 추출된 키워드를 구조화된 형태로 저장
+       - location: 위치 정보
+       - food_type: 음식 종류
+       - keywords: 검색 키워드 리스트
+    4. state의 result_dict에 재작성된 쿼리와 키워드 정보 저장
+    5. current_step과 metadata 업데이트
+    """
+    logger.info("쿼리 재작성 및 키워드 추출 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "rewrite_query_and_extract_keywords"
+    return state
+
+
+async def hybrid_search_node(state: WorkflowState) -> WorkflowState:
+    """
+    하이브리드 검색 노드
+    
+    구현 필요 사항:
+    1. state에서 추출된 키워드 정보 가져오기
+    2. 하이브리드 검색 수행 (벡터 검색 + 키워드 검색)
+       - 벡터 검색: 의미 기반 검색 (임베딩 사용)
+       - 키워드 검색: 정확한 키워드 매칭
+       - 두 결과를 결합하여 최종 검색 결과 생성
+    3. 검색 결과를 구조화하여 저장
+       - documents: 검색된 문서 리스트
+       - scores: 각 문서의 관련성 점수
+       - search_metadata: 검색 메타데이터 (검색 시간, 결과 수 등)
+    4. state의 result_dict에 검색 결과 저장
+    5. current_step과 metadata 업데이트
+    """
+    logger.info("하이브리드 검색 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "hybrid_search"
+    return state
+
+
+async def evaluate_search_results_node(state: WorkflowState) -> WorkflowState:
+    """
+    검색 결과 평가 노드
+    
+    구현 필요 사항:
+    1. state에서 검색 결과 가져오기
+    2. LLM을 사용하여 검색 결과 평가
+       - 검색 결과가 원래 질문과 연관성이 있는지 평가
+       - 문서 수가 충분한지 평가 (최소 문서 수 기준)
+       - 검색 결과의 품질 평가
+    3. 평가 결과를 구조화하여 저장
+       - is_relevant: 연관성 여부
+       - is_sufficient: 문서 수 충분 여부
+       - quality_score: 품질 점수
+       - reasoning: 평가 사고 과정
+    4. state의 result_dict에 평가 결과 저장
+    5. current_step과 metadata 업데이트
+    """
+    logger.info("검색 결과 평가 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "evaluate_search_results"
+    return state
+
+
+async def generate_final_response_node(state: WorkflowState) -> WorkflowState:
+    """
+    최종 응답 생성 노드
+    
+    구현 필요 사항:
+    1. state에서 모든 검색 결과와 평가 정보 가져오기
+    2. LLM을 사용하여 최종 응답 생성
+       - 검색된 문서들을 종합하여 답변 생성
+       - 사용자 질문에 대한 명확하고 유용한 답변 제공
+       - 맛집 정보, 위치, 추천 이유 등을 포함
+    3. 생성된 응답을 구조화하여 저장
+       - final_answer: 최종 답변 텍스트
+       - restaurants: 추천 맛집 리스트 (있는 경우)
+       - sources: 참고한 문서/소스 정보
+    4. state의 result_dict에 최종 응답 저장
+    5. current_step과 metadata 업데이트 (status: "completed")
+    """
+    logger.info("최종 응답 생성 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "generate_final_response"
+    state["metadata"]["status"] = "completed"
+    return state
+
+
+async def parallel_search_node(state: WorkflowState) -> WorkflowState:
+    """
+    병렬 검색 노드 (네이버지도, 네이버블로그, 웹 검색)
+    
+    구현 필요 사항:
+    1. state에서 검색 쿼리 가져오기
+    2. 세 가지 검색 소스를 병렬로 검색
+       - 네이버지도 API: 지도 기반 맛집 검색
+       - 네이버블로그 API: 블로그 리뷰 검색
+       - 웹 검색 API: 일반 웹 검색
+    3. 각 검색 결과를 병합하여 저장
+       - naver_map_results: 네이버지도 검색 결과
+       - naver_blog_results: 네이버블로그 검색 결과
+       - web_search_results: 웹 검색 결과
+       - combined_results: 통합 검색 결과
+    4. state의 result_dict에 병렬 검색 결과 저장
+    5. current_step과 metadata 업데이트
+    """
+    logger.info("병렬 검색 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "parallel_search"
+    return state
+
+
+async def evaluate_relevance_node(state: WorkflowState) -> WorkflowState:
+    """
+    연관성 평가 노드
+    
+    구현 필요 사항:
+    1. state에서 병렬 검색 결과 가져오기
+    2. LLM을 사용하여 검색 결과와 쿼리의 연관성 평가
+       - 각 검색 결과가 원래 질문과 얼마나 관련이 있는지 평가
+       - 검색 결과의 신뢰도 평가
+       - 검색 결과가 충분한 정보를 제공하는지 평가
+    3. 평가 결과를 구조화하여 저장
+       - relevance_score: 연관성 점수
+       - is_relevant: 연관성 여부
+       - needs_rewrite: 쿼리 재작성 필요 여부
+       - reasoning: 평가 사고 과정
+    4. state의 result_dict에 연관성 평가 결과 저장
+    5. current_step과 metadata 업데이트
+    """
+    logger.info("연관성 평가 노드 실행")
+    # TODO: 구현 필요
+    state["current_step"] = "evaluate_relevance"
+    return state
+
+
+async def rewrite_query_with_context_node(state: WorkflowState) -> WorkflowState:
+    """
+    컨텍스트 기반 쿼리 재작성 노드
+    
+    구현 필요 사항:
+    1. state에서 다음 정보 가져오기
+       - 초기 질문 (user_query)
+       - 이전 검색 쿼리
+       - 검색된 문서들
+    2. LLM을 사용하여 컨텍스트를 고려한 쿼리 재작성
+       - 검색된 문서를 분석하여 부족한 정보 파악
+       - 초기 질문의 의도를 더 명확히 반영
+       - 검색에 더 적합한 키워드로 재작성
+    3. 재작성된 쿼리를 저장
+       - rewritten_query: 재작성된 쿼리
+       - rewrite_reason: 재작성 이유
+       - extracted_keywords: 새로 추출된 키워드
+    4. state의 result_dict에 재작성된 쿼리 저장
+    5. current_step과 metadata 업데이트
+    6. 무한 루프 방지를 위한 재시도 카운터 확인 (metadata에 저장)
+    """
+    logger.info("컨텍스트 기반 쿼리 재작성 노드 실행")
+    # TODO: 구현 필요
+    # 무한 루프 방지: 재시도 카운터 확인
+    retry_count = state.get("metadata", {}).get("rewrite_retry_count", 0)
+    state["metadata"]["rewrite_retry_count"] = retry_count + 1
+    state["current_step"] = "rewrite_query_with_context"
+    return state
+
+
+# ============================================================================
+# 조건 함수들 (라우팅 함수)
+# ============================================================================
+
+def route_after_query_evaluation(state: WorkflowState) -> str:
+    """
+    쿼리 평가 후 라우팅 함수
+    
+    구현 필요 사항:
+    1. state에서 evaluate_query_node의 결과 가져오기
+    2. result_dict에서 평가 결과 확인
+       - is_valid: 맛집 검색에 적합한 쿼리인지
+       - is_inappropriate: 부적절한 질문인지
+    3. 조건에 따라 분기
+       - is_valid가 True이고 is_inappropriate가 False면 "valid" 반환
+       - 그 외의 경우 "invalid" 반환하여 END로 이동
+    4. 반환값: "valid" 또는 "invalid"
+    """
+    result_dict = state.get("result_dict", {})
+    # TODO: 구현 필요 - result_dict의 구조에 맞게 평가
+    is_valid = result_dict.get("is_valid", False)
+    is_inappropriate = result_dict.get("is_inappropriate", False)
+    
+    if is_valid and not is_inappropriate:
+        return "valid"
+    else:
+        return "invalid"
+
+
+def route_after_search_evaluation(state: WorkflowState) -> str:
+    """
+    검색 결과 평가 후 라우팅 함수
+    
+    구현 필요 사항:
+    1. state에서 evaluate_search_results_node의 결과 가져오기
+    2. result_dict에서 평가 결과 확인
+       - is_relevant: 검색 결과가 질문과 연관성이 있는지
+       - is_sufficient: 문서 수가 충분한지
+       - quality_score: 검색 결과 품질 점수
+    3. 조건에 따라 분기
+       - is_relevant가 True이고 is_sufficient가 True면 "valid" 반환 (최종 응답 생성)
+       - 그 외의 경우 "invalid" 반환 (병렬 검색으로 이동)
+    4. 반환값: "valid" 또는 "invalid"
+    """
+    result_dict = state.get("result_dict", {})
+    # TODO: 구현 필요 - result_dict의 구조에 맞게 평가
+    is_relevant = result_dict.get("is_relevant", False)
+    is_sufficient = result_dict.get("is_sufficient", False)
+    
+    if is_relevant and is_sufficient:
+        return "valid"
+    else:
+        return "invalid"
+
+
+def route_after_relevance_evaluation(state: WorkflowState) -> str:
+    """
+    연관성 평가 후 라우팅 함수
+    
+    구현 필요 사항:
+    1. state에서 evaluate_relevance_node의 결과 가져오기
+    2. result_dict에서 평가 결과 확인
+       - is_relevant: 연관성 여부
+       - needs_rewrite: 쿼리 재작성 필요 여부
+       - relevance_score: 연관성 점수
+    3. 무한 루프 방지 확인
+       - metadata의 rewrite_retry_count 확인
+       - 최대 재시도 횟수(예: 3회) 초과 시 "valid" 반환하여 강제 종료
+    4. 조건에 따라 분기
+       - needs_rewrite가 True이고 재시도 횟수가 최대치 미만이면 "rewrite" 반환
+       - 그 외의 경우 "valid" 반환 (최종 응답 생성)
+    5. 반환값: "rewrite" 또는 "valid"
+    """
+    result_dict = state.get("result_dict", {})
+    metadata = state.get("metadata", {})
+    
+    # 무한 루프 방지: 최대 재시도 횟수 확인
+    retry_count = metadata.get("rewrite_retry_count", 0)
+    max_retries = 3  # 최대 재시도 횟수
+    
+    if retry_count >= max_retries:
+        logger.warning(f"최대 재시도 횟수({max_retries}) 초과, 강제 종료")
+        return "valid"
+    
+    # TODO: 구현 필요 - result_dict의 구조에 맞게 평가
+    needs_rewrite = result_dict.get("needs_rewrite", False)
+    
+    if needs_rewrite:
+        return "rewrite"
+    else:
+        return "valid"
