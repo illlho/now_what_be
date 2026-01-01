@@ -39,6 +39,11 @@ from app.nodes.workflow_nodes import (
 
 # 유틸리티 함수 import
 from app.utils.llm_utils import LLMRequest, llm_call
+from app.utils.graph_visualization import (
+    generate_mermaid_diagram,
+    generate_html_content,
+    generate_error_html
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/orchestration", tags=["orchestration"])
@@ -155,89 +160,16 @@ async def get_graph_visualization_html():
     Mermaid.js를 사용하여 브라우저에서 바로 확인할 수 있습니다.
     """
     try:
-        # 그래프 생성
-        graph = _build_graph()
-        
-        # 그래프 컴파일
-        compiled_graph = graph.compile()
-        
         # Mermaid 다이어그램 생성
-        mermaid_code = compiled_graph.get_graph().draw_mermaid()
+        mermaid_code = generate_mermaid_diagram(_build_graph)
         
-        # HTML 템플릿 생성
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>워크플로우 그래프 시각화</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            color: #333;
-            border-bottom: 2px solid #4CAF50;
-            padding-bottom: 10px;
-        }}
-        .mermaid {{
-            text-align: center;
-            margin: 20px 0;
-        }}
-        .info {{
-            background-color: #e3f2fd;
-            padding: 15px;
-            border-radius: 4px;
-            margin: 20px 0;
-        }}
-        .code-block {{
-            background-color: #f5f5f5;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-            font-family: monospace;
-            font-size: 12px;
-            margin: 10px 0;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="mermaid">
-            {mermaid_code}
-        </div>
-    </div>
-</body>
-</html>
-        """
+        # HTML 콘텐츠 생성
+        html_content = generate_html_content(mermaid_code)
         
         return HTMLResponse(content=html_content)
     except Exception as e:
         logger.error(f"그래프 HTML 시각화 실패: {str(e)}", exc_info=True)
-        error_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>오류 발생</title>
-</head>
-<body>
-    <h1>그래프 시각화 중 오류 발생</h1>
-    <p>{str(e)}</p>
-</body>
-</html>
-        """
+        error_html = generate_error_html(str(e))
         return HTMLResponse(content=error_html, status_code=500)
 
 
