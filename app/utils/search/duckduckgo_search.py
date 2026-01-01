@@ -92,3 +92,24 @@ async def search_duckduckgo(
             "hits": []
         }
 
+
+async def execute_duckduckgo_search(queries: list[str]) -> dict:
+    """
+    DuckDuckGo 검색 실행 함수 (병렬 실행용)
+    
+    Args:
+        queries: 검색 쿼리 리스트
+        
+    Returns:
+        검색 결과 딕셔너리 (예외 발생 시 빈 결과 반환)
+    """
+    try:
+        return await search_duckduckgo(queries)
+    except Exception as e:
+        logger.error(f"DuckDuckGo 검색 실패: {str(e)}", exc_info=True)
+        return {
+            "queries": queries[:3] if queries else [],
+            "count": 0,
+            "hits": []
+        }
+

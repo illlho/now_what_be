@@ -110,3 +110,24 @@ async def search_naver_map(queries: list[str]) -> dict:
         "hits": unique_hits[:30]  # 최대 30개로 제한
     }
 
+
+async def execute_naver_map_search(queries: list[str]) -> dict:
+    """
+    네이버 지도 검색 실행 함수 (병렬 실행용)
+    
+    Args:
+        queries: 검색 쿼리 리스트
+        
+    Returns:
+        검색 결과 딕셔너리 (예외 발생 시 빈 결과 반환)
+    """
+    try:
+        return await search_naver_map(queries)
+    except Exception as e:
+        logger.error(f"네이버 지도 검색 실패: {str(e)}", exc_info=True)
+        return {
+            "queries": queries if queries else [],
+            "count": 0,
+            "hits": []
+        }
+

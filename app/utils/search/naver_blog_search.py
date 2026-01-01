@@ -115,3 +115,24 @@ async def search_naver_blog(
         "hits": unique_hits[:max_total]  # 최대 개수 제한
     }
 
+
+async def execute_naver_blog_search(queries: list[str]) -> dict:
+    """
+    네이버 블로그 검색 실행 함수 (병렬 실행용)
+    
+    Args:
+        queries: 검색 쿼리 리스트
+        
+    Returns:
+        검색 결과 딕셔너리 (예외 발생 시 빈 결과 반환)
+    """
+    try:
+        return await search_naver_blog(queries)
+    except Exception as e:
+        logger.error(f"네이버 블로그 검색 실패: {str(e)}", exc_info=True)
+        return {
+            "queries": queries[:3] if queries else [],
+            "count": 0,
+            "hits": []
+        }
+
