@@ -7,9 +7,45 @@ import os
 import logging
 import re
 import httpx
-from typing import Optional
+from typing import Optional, List, Dict
+from pydantic import BaseModel
+
+from app.utils.llm_utils import llm_call, LLMRequest
+from app.schemas.llm_response_models import SearchResultsEvaluationResult
 
 logger = logging.getLogger(__name__)
+
+
+# 테스트용 모델
+class NaverBlogSearchResult(BaseModel):
+    """네이버 블로그 검색 결과 항목"""
+    title: str
+    link: str
+    description: str
+    bloggername: Optional[str] = None
+    bloggerlink: Optional[str] = None
+    postdate: Optional[str] = None
+
+
+class NaverBlogSearchResults(BaseModel):
+    """네이버 블로그 검색 결과"""
+    queries: List[str]
+    count: int
+    hits: List[NaverBlogSearchResult]
+
+
+class EvaluateNaverBlogRequest(BaseModel):
+    """네이버 블로그 검색 결과 평가 요청"""
+    search_results: NaverBlogSearchResults
+    original_query: str
+
+
+class EvaluateNaverBlogResponse(BaseModel):
+    """네이버 블로그 검색 결과 평가 응답"""
+    evaluation: Dict
+    results: Dict[str, Dict]  # link를 key로 하는 각 항목별 평가 결과 (title, description, reason, pass 포함)
+    search_results: NaverBlogSearchResults
+    original_query: str
 
 
 def strip_html_tags(text: str) -> str:
@@ -87,7 +123,7 @@ async def search_naver_blog(
                     if title and link:
                         hits.append({
                             "title": title,
-                            "link": link,
+                            "link": link,  # DB unique key로 사용 가능한 링크
                             "description": strip_html_tags(str(item.get("description", ""))),
                             "bloggername": item.get("bloggername"),
                             "bloggerlink": item.get("bloggerlink"),
@@ -116,23 +152,306 @@ async def search_naver_blog(
     }
 
 
+async def evaluate_naver_blog_results(
+    search_results: dict,
+    original_query: str
+) -> dict:
+    """
+    네이버 블로그 검색 결과를 AI API로 평가합니다.
+    
+    Args:
+        search_results: 검색 결과 딕셔너리 (hits 포함)
+        original_query: 원본 검색 쿼리
+        
+    Returns:
+        평가 결과 딕셔너리 (is_relevant, is_sufficient, quality_score, reasoning 포함)
+    """
+    hits = search_results.get("hits", [])
+    
+    if not hits:
+        return {
+            "is_relevant": False,
+            "is_sufficient": False,
+            "quality_score": 0.0,
+            "reasoning": "검색 결과가 없습니다."
+        }
+    
+    # 전체 검색 결과에서 타이틀과 description만 추출 (평가용 샘플링은 최대 10개)
+    # 평가에는 제목과 설명만 필요 (블로거명, 링크, 날짜 등은 불필요)
+    samples = hits[:10] if len(hits) > 10 else hits
+    samples_text = "\n".join([
+        f"[{i+1}] 제목: {hit.get('title', 'N/A')}\n   설명: {hit.get('description', 'N/A')[:200]}"
+        for i, hit in enumerate(samples)
+    ])
+    
+    # 시스템 프롬프트 (300자 이내)
+    system_prompt = """네이버 블로그 검색 결과 평가 전문 AI. 맛집 검색 목적에 맞는 실용적 정보 제공 여부를 종합 평가. 
+    JSON 응답: is_relevant(연관성), is_sufficient(문서수 충분, 최소3개), quality_score(0.0-1.0), reasoning(평가 이유, 최대 150자로 간결하게 작성)."""
+    
+    # 사용자 프롬프트
+    user_prompt = f"""다음 네이버 블로그 검색 결과를 평가하세요:
+
+사용자 질문: "{original_query}"
+검색 결과 (전체 {len(hits)}개, 평가용 샘플 {len(samples)}개):
+{samples_text}
+
+평가 기준:
+1. 위치 및 음식 종류 일치: 사용자가 요청한 위치와 음식 종류가 검색 결과에 일치하는가?
+2. 실용성: 실제 맛집 정보(위치, 음식 종류, 맛집 이름, 경험 등)를 제공하는가?
+3. 문서 수 충분성: 최소 3개 이상의 관련 결과가 있는가?
+4. 품질: 검색 결과의 정확성, 상세도, 신뢰성이 높은가?
+5. 종합 판단: 대부분의 결과가 사용자 질문과 직접적으로 관련이 있고 실용적인 정보를 제공하는가?
+
+전반적인 검색 결과의 품질과 사용자 질문에 대한 적합성을 종합적으로 평가하세요.
+평가 이유(reasoning)는 최대 150자로 간결하게 작성하세요."""
+    
+    try:
+        llm_request: LLMRequest = {
+            "user_prompt": user_prompt,
+            "system_prompt": system_prompt
+        }
+        
+        result, _ = await llm_call(llm_request, SearchResultsEvaluationResult)
+        
+        logger.info(
+            f"네이버 블로그 검색 결과 평가 완료: "
+            f"is_relevant={result.is_relevant}, "
+            f"is_sufficient={result.is_sufficient}, "
+            f"quality_score={result.quality_score:.2f}"
+        )
+        
+        return {
+            "is_relevant": result.is_relevant,
+            "is_sufficient": result.is_sufficient,
+            "quality_score": result.quality_score,
+            "reasoning": result.reasoning
+        }
+    except Exception as e:
+        logger.error(f"네이버 블로그 검색 결과 평가 실패: {str(e)}", exc_info=True)
+        # 기본 평가 반환
+        return {
+            "is_relevant": len(hits) > 0,
+            "is_sufficient": len(hits) >= 3,
+            "quality_score": 0.5 if len(hits) >= 3 else 0.0,
+            "reasoning": f"평가 실패, 기본 평가 사용: {len(hits)}개 문서"
+        }
+
+
+async def evaluate_individual_blog_item(
+    hit: dict,
+    original_query: str
+) -> dict:
+    """
+    개별 블로그 검색 결과 항목을 평가합니다.
+    
+    Args:
+        hit: 검색 결과 항목 (title, link, description 포함)
+        original_query: 원본 검색 쿼리
+        
+    Returns:
+        평가 결과 딕셔너리 (reason, pass 포함)
+    """
+    title = hit.get("title", "")
+    description = hit.get("description", "")[:300]  # 설명은 300자로 제한
+    
+    # 시스템 프롬프트
+    system_prompt = """네이버 블로그 검색 결과 항목 평가 전문 AI. 맛집 검색 목적에 맞는 실용적 정보 제공 여부를 평가. 
+    JSON 응답: is_relevant(연관성), reasoning(평가 이유, 최대 100자로 간결하게 작성)."""
+    
+    # 사용자 프롬프트
+    user_prompt = f"""다음 네이버 블로그 검색 결과 항목을 평가하세요:
+
+사용자 질문: "{original_query}"
+검색 결과 항목:
+제목: {title}
+설명: {description}
+
+평가 기준:
+1. 위치 일치: 사용자가 요청한 위치(지역명)와 검색 결과의 위치가 일치하는가?
+2. 음식 종류 일치: 사용자가 요청한 음식 종류와 검색 결과의 음식 종류가 일치하는가?
+3. 실용성: 실제 맛집 정보(위치, 음식 종류, 맛집 이름 등)를 제공하는가?
+4. 직접성: 제목과 설명 모두를 종합하여 평가. 제목이 일반적이어도 설명에 구체적 정보가 있으면 유용할 수 있음.
+5. 간접 언급 vs 직접 정보: 과거 경험 언급만 있는 경우보다 현재 맛집 정보를 직접 제공하는 경우를 우선 평가.
+
+이 항목이 사용자 질문과 연관성이 있고, 맛집 검색 목적에 실용적인 정보를 제공하는지 평가하세요.
+평가 이유(reasoning)는 최대 100자로 간결하게 작성하세요."""
+    
+    try:
+        llm_request: LLMRequest = {
+            "user_prompt": user_prompt,
+            "system_prompt": system_prompt
+        }
+        
+        result, _ = await llm_call(llm_request, SearchResultsEvaluationResult)
+        
+        return {
+            "reason": result.reasoning,
+            "pass": result.is_relevant
+        }
+    except Exception as e:
+        logger.error(f"개별 블로그 항목 평가 실패: {str(e)}", exc_info=True)
+        # 기본 평가: 제목이나 설명에 쿼리 키워드가 포함되어 있으면 pass
+        query_keywords = original_query.lower().split()
+        title_lower = title.lower()
+        desc_lower = description.lower()
+        has_keywords = any(keyword in title_lower or keyword in desc_lower for keyword in query_keywords)
+        
+        return {
+            "reason": f"평가 실패, 기본 평가 사용: {'키워드 포함' if has_keywords else '키워드 미포함'}",
+            "pass": has_keywords
+        }
+
+
 async def execute_naver_blog_search(queries: list[str]) -> dict:
     """
     네이버 블로그 검색 실행 함수 (병렬 실행용)
+    
+    검색을 수행하고 결과를 AI API로 평가합니다.
     
     Args:
         queries: 검색 쿼리 리스트
         
     Returns:
-        검색 결과 딕셔너리 (예외 발생 시 빈 결과 반환)
+        검색 결과 딕셔너리 (evaluation 필드 포함, 예외 발생 시 빈 결과 반환)
     """
     try:
-        return await search_naver_blog(queries)
+        # 검색 수행
+        search_results = await search_naver_blog(queries)
+        
+        # 원본 쿼리 추출 (첫 번째 쿼리 사용)
+        original_query = queries[0] if queries else ""
+        
+        # 검색 결과 평가
+        evaluation = await evaluate_naver_blog_results(search_results, original_query)
+        
+        # 평가 결과를 검색 결과에 추가
+        search_results["evaluation"] = evaluation
+        
+        return search_results
     except Exception as e:
         logger.error(f"네이버 블로그 검색 실패: {str(e)}", exc_info=True)
         return {
             "queries": queries[:3] if queries else [],
             "count": 0,
-            "hits": []
+            "hits": [],
+            "evaluation": {
+                "is_relevant": False,
+                "is_sufficient": False,
+                "quality_score": 0.0,
+                "reasoning": f"검색 실패: {str(e)}"
+            }
         }
+
+
+async def test_evaluate_naver_blog_results(
+    search_results: Optional[dict] = None,
+    original_query: Optional[str] = None
+) -> dict:
+    """
+    네이버 블로그 검색 결과 평가 함수를 테스트하는 함수
+    
+    각 검색 결과 항목별로 평가를 수행하고, link를 key로 하여 결과를 반환합니다.
+    
+    Args:
+        search_results: 검색 결과 딕셔너리 (없으면 기본 테스트 데이터 사용)
+        original_query: 원본 검색 쿼리 (없으면 기본값 사용)
+        
+    Returns:
+        평가 결과와 검색 결과를 포함한 딕셔너리
+        - evaluation: 전체 평가 결과
+        - results: link를 key로 하는 각 항목별 평가 결과 (title, description, reason, pass 포함)
+    """
+    # 기본 테스트 데이터
+    default_data = {
+        "queries": ["삼겹살 의정부"],
+        "count": 5,
+        "hits": [
+            {
+                "title": "2025년 10월 밥상 기록",
+                "link": "https://blog.naver.com/jsa0406/224130377517",
+                "description": "#의정부동오마을 #동오쭈꾸미 10월 퇴사후 자유로운 시간인 낮 시간대를 활용해서 친정부모님과 식사 후... 야채랑 삼겹살이랑 내가 좋아하는 된장찌게! #이지듀 시어머니께서 친정 엄마 여행 선물겸 우리것도... ",
+                "bloggername": "제이씬의 꿈꾸는 일상블로그",
+                "bloggerlink": "blog.naver.com/jsa0406",
+                "postdate": "20260101"
+            },
+            {
+                "title": "의정부삼겹살맛집은 싹쓰리 솥뚜껑 김치삼겹살이 제대로임!",
+                "link": "https://blog.naver.com/gksthf219/224130354195",
+                "description": "의정부삼겹살맛집 신곡동삼겹살맛집 의정부김치삼겹살 안녕하세요 솔입니다! 오늘은 신곡동에서 제대로 된 삼겹살을 즐기고 싶어서 싹쓰리 솥뚜껑 김치삼겹살 신곡1동점을 방문했어요 주소 경기 의정부시... ",
+                "bloggername": "Things I Loved Most",
+                "bloggerlink": "blog.naver.com/gksthf219",
+                "postdate": "20260101"
+            },
+            {
+                "title": "의정부 산곡동 맛집 인생돼지 의정부고산점 고기 구워주는 곳... ",
+                "link": "https://blog.naver.com/hingkku99/224130323639",
+                "description": "바라요ㅎㅎ #의정부산곡동맛집 #의정부고산동맛집 #의정부고산동맛집 #의정부고기구워주는곳 #의정부고기집 #의정부삼겹살맛집 #의정부삼겹살주차 #의정부삼겹살집 #인생돼지 #인생돼지의정부고산점... ",
+                "bloggername": "꽉토피아",
+                "bloggerlink": "blog.naver.com/hingkku99",
+                "postdate": "20260101"
+            },
+            {
+                "title": "[호랭이식당 의정부본점] 녹양동 맛집 | 의정부 삼겹살 1등 맛집!",
+                "link": "https://blog.naver.com/qmarkemark/224130315627",
+                "description": "#의정부고기집 #녹양동맛집 #녹양동삼겹살 #녹양동회식 #의정부삼겹살 #의정부맛집 총평 녹양동 삼겹살.. 여기가 왜 급냉 삼겹살 전문이고 의정부 삼겹살 1등 맛집이라고 하는 이유가 있더라고요... ",
+                "bloggername": "물음표?느낌표!의 블로그",
+                "bloggerlink": "blog.naver.com/qmarkemark",
+                "postdate": "20260101"
+            },
+            {
+                "title": "서울 종로3가역 삼겹살 맛집 '참돼짓간'",
+                "link": "https://blog.naver.com/hong-owo-si/224130304404",
+                "description": "의정부에서 먹은 고기들은 다 맛있었는데, 서울은 사실 그저 그런 곳이 대부분이었거든요...? 스울 밸 거 읍내 (서울 별 거 없네) 하며 ㅋㅋㅋ 고기 먹곤 했는데, 종로3가역 삼겹살 맛집 참돼짓간은 다르다... ",
+                "bloggername": "동그라미",
+                "bloggerlink": "blog.naver.com/hong-owo-si",
+                "postdate": "20260101"
+            }
+        ]
+    }
+    
+    # 파라미터가 없으면 기본 데이터 사용
+    if search_results is None:
+        search_results = default_data
+    
+    if original_query is None:
+        original_query = "삼겹살 의정부"
+    
+    try:
+        # 전체 평가 수행
+        evaluation = await evaluate_naver_blog_results(
+            search_results=search_results,
+            original_query=original_query
+        )
+        
+        # 각 항목별 평가 수행
+        hits = search_results.get("hits", [])
+        results = {}
+        
+        for hit in hits:
+            link = hit.get("link", "")
+            if not link:
+                continue
+            
+            # 개별 항목 평가
+            item_evaluation = await evaluate_individual_blog_item(hit, original_query)
+            
+            # link를 key로 하여 결과 저장
+            results[link] = {
+                "title": hit.get("title", ""),
+                "description": hit.get("description", ""),
+                "reason": item_evaluation.get("reason", ""),
+                "pass": item_evaluation.get("pass", False)
+            }
+        
+        logger.info(f"네이버 블로그 검색 결과 평가 완료: 전체 평가 및 {len(results)}개 항목 평가 완료")
+        
+        return {
+            "evaluation": evaluation,
+            "results": results,  # link를 key로 하는 각 항목별 평가 결과
+            "search_results": search_results,
+            "original_query": original_query
+        }
+    except Exception as e:
+        logger.error(f"네이버 블로그 검색 결과 평가 실패: {str(e)}", exc_info=True)
+        raise
 

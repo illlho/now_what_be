@@ -21,6 +21,8 @@ from app.schemas.orchestration_models import (
     OrchestrationResponse,
     GraphVisualizationResponse,
 )
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
 
 # 노드 함수 import
 from app.nodes.workflow_nodes import (
@@ -43,6 +45,12 @@ from app.utils.graph_visualization import (
     generate_mermaid_diagram,
     generate_html_content,
     generate_error_html
+)
+from app.utils.search.naver_blog_search import (
+    test_evaluate_naver_blog_results,
+    EvaluateNaverBlogRequest,
+    EvaluateNaverBlogResponse,
+    NaverBlogSearchResults
 )
 
 logger = logging.getLogger(__name__)
@@ -232,3 +240,36 @@ async def start_foodie_workflow(request: UserRequest):
             success=False,
             token_usage=None
         )
+
+
+@router.post("/test/evaluate-naver-blog", response_model=EvaluateNaverBlogResponse, summary="네이버 블로그 검색 결과 평가 테스트")
+async def test_evaluate_naver_blog(request: Optional[EvaluateNaverBlogRequest] = None):
+    """
+    네이버 블로그 검색 결과 평가 함수를 테스트하는 엔드포인트
+    
+    요청이 없으면 기본 테스트 데이터를 사용합니다.
+    """
+    # 요청이 있으면 사용, 없으면 None 전달 (기본 데이터 사용)
+    search_results_dict = None
+    original_query = None
+    
+    # if request:
+    #     search_results_dict = request.search_results.model_dump()
+    #     original_query = request.original_query
+    
+    try:
+        # 테스트 함수 호출 (로직은 naver_blog_search.py에 있음)
+        result = await test_evaluate_naver_blog_results(
+            search_results=search_results_dict,
+            original_query=original_query
+        )
+        
+        return EvaluateNaverBlogResponse(
+            evaluation=result["evaluation"],
+            results=result["results"],  # link를 key로 하는 각 항목별 평가 결과
+            search_results=NaverBlogSearchResults(**result["search_results"]),
+            original_query=result["original_query"]
+        )
+    except Exception as e:
+        logger.error(f"네이버 블로그 검색 결과 평가 실패: {str(e)}", exc_info=True)
+        raise

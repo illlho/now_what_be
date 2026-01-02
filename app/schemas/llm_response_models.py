@@ -29,3 +29,11 @@ class QueryRewriteResult(BaseModel):
     keywords: list[str] = Field(default_factory=list, description="검색 키워드 리스트")
     reasoning: str = Field(..., description="재작성 이유 및 키워드 추출 과정")
 
+
+class SearchResultsEvaluationResult(BaseModel):
+    """검색 결과 평가 결과 모델"""
+    is_relevant: bool = Field(..., description="검색 결과가 원래 질문과 연관성이 있는지")
+    is_sufficient: bool = Field(default=True, description="문서 수가 충분한지 (최소 문서 수 기준)")
+    quality_score: float = Field(..., description="검색 결과 품질 점수 (0.0-1.0)")
+    reasoning: str = Field(..., description="평가 사고 과정")
+
