@@ -12,14 +12,12 @@ from pydantic import BaseModel
 
 from app.utils.llm_utils import llm_call, LLMRequest
 from app.schemas.llm_response_models import (
-    SearchResultsEvaluationResult,
     BlogItemsEvaluationResult
 )
 
 logger = logging.getLogger(__name__)
 
 
-# 테스트용 모델
 class NaverBlogSearchResult(BaseModel):
     """네이버 블로그 검색 결과 항목"""
     title: str
@@ -153,91 +151,6 @@ async def search_naver_blog(
         "count": len(unique_hits),
         "hits": unique_hits[:max_total]  # 최대 개수 제한
     }
-
-
-async def evaluate_naver_blog_results(
-    search_results: dict,
-    original_query: str
-) -> dict:
-    """
-    네이버 블로그 검색 결과를 AI API로 평가합니다.
-    
-    Args:
-        search_results: 검색 결과 딕셔너리 (hits 포함)
-        original_query: 원본 검색 쿼리
-        
-    Returns:
-        평가 결과 딕셔너리 (is_relevant, is_sufficient, quality_score, reasoning 포함)
-    """
-    hits = search_results.get("hits", [])
-    
-    if not hits:
-        return {
-            "is_relevant": False,
-            "is_sufficient": False,
-            "quality_score": 0.0,
-            "reasoning": "검색 결과가 없습니다."
-        }
-    
-    # 전체 검색 결과에서 타이틀과 description만 추출 (평가용 샘플링은 최대 10개)
-    # 평가에는 제목과 설명만 필요 (블로거명, 링크, 날짜 등은 불필요)
-    samples = hits[:10] if len(hits) > 10 else hits
-    samples_text = "\n".join([
-        f"[{i+1}] 제목: {hit.get('title', 'N/A')}\n   설명: {hit.get('description', 'N/A')[:200]}"
-        for i, hit in enumerate(samples)
-    ])
-    
-    # 시스템 프롬프트 (300자 이내)
-    system_prompt = """네이버 블로그 검색 결과 평가 전문 AI. 맛집 검색 목적에 맞는 실용적 정보 제공 여부를 종합 평가. 
-    JSON 응답: is_relevant(연관성), is_sufficient(문서수 충분, 최소3개), quality_score(0.0-1.0), reasoning(평가 이유, 최대 150자로 간결하게 작성)."""
-    
-    # 사용자 프롬프트
-    user_prompt = f"""다음 네이버 블로그 검색 결과를 평가하세요:
-
-사용자 질문: "{original_query}"
-검색 결과 (전체 {len(hits)}개, 평가용 샘플 {len(samples)}개):
-{samples_text}
-
-평가 기준:
-1. 위치 및 음식 종류 일치: 사용자가 요청한 위치와 음식 종류가 검색 결과에 일치하는가?
-2. 실용성: 실제 맛집 정보(위치, 음식 종류, 맛집 이름, 경험 등)를 제공하는가?
-3. 문서 수 충분성: 최소 3개 이상의 관련 결과가 있는가?
-4. 품질: 검색 결과의 정확성, 상세도, 신뢰성이 높은가?
-5. 종합 판단: 대부분의 결과가 사용자 질문과 직접적으로 관련이 있고 실용적인 정보를 제공하는가?
-
-전반적인 검색 결과의 품질과 사용자 질문에 대한 적합성을 종합적으로 평가하세요.
-평가 이유(reasoning)는 최대 150자로 간결하게 작성하세요."""
-    
-    try:
-        llm_request: LLMRequest = {
-            "user_prompt": user_prompt,
-            "system_prompt": system_prompt
-        }
-        
-        result, _ = await llm_call(llm_request, SearchResultsEvaluationResult)
-        
-        logger.info(
-            f"네이버 블로그 검색 결과 평가 완료: "
-            f"is_relevant={result.is_relevant}, "
-            f"is_sufficient={result.is_sufficient}, "
-            f"quality_score={result.quality_score:.2f}"
-        )
-        
-        return {
-            "is_relevant": result.is_relevant,
-            "is_sufficient": result.is_sufficient,
-            "quality_score": result.quality_score,
-            "reasoning": result.reasoning
-        }
-    except Exception as e:
-        logger.error(f"네이버 블로그 검색 결과 평가 실패: {str(e)}", exc_info=True)
-        # 기본 평가 반환
-        return {
-            "is_relevant": len(hits) > 0,
-            "is_sufficient": len(hits) >= 3,
-            "quality_score": 0.5 if len(hits) >= 3 else 0.0,
-            "reasoning": f"평가 실패, 기본 평가 사용: {len(hits)}개 문서"
-        }
 
 
 async def evaluate_all_blog_items(
@@ -383,6 +296,7 @@ async def execute_naver_blog_search(queries: list[str]) -> dict:
     네이버 블로그 검색 실행 함수 (병렬 실행용)
     
     검색을 수행하고 결과를 AI API로 평가합니다.
+    개별 항목 평가 후 종합하여 전체 평가를 도출합니다.
     
     Args:
         queries: 검색 쿼리 리스트
@@ -397,8 +311,26 @@ async def execute_naver_blog_search(queries: list[str]) -> dict:
         # 원본 쿼리 추출 (첫 번째 쿼리 사용)
         original_query = queries[0] if queries else ""
         
-        # 검색 결과 평가
-        evaluation = await evaluate_naver_blog_results(search_results, original_query)
+        hits = search_results.get("hits", [])
+        
+        if not hits:
+            # 검색 결과가 없으면 기본 평가 반환
+            search_results["evaluation"] = {
+                "is_relevant": False,
+                "is_sufficient": False,
+                "quality_score": 0.0,
+                "reasoning": "검색 결과가 없습니다."
+            }
+            return search_results
+        
+        # 모든 항목을 한 번의 AI API 호출로 평가
+        items_evaluation = await evaluate_all_blog_items(hits, original_query)
+        
+        # 개별 평가 결과를 종합하여 전체 평가 도출 (AI API 없이)
+        evaluation = aggregate_evaluation_from_items(
+            items_evaluation,
+            len(hits)
+        )
         
         # 평가 결과를 검색 결과에 추가
         search_results["evaluation"] = evaluation
