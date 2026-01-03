@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class UserRequest(BaseModel):
     """유저의 요청 모델"""
-    query: str = Field(..., min_length=1, description="유저가 요청한 내용")
+    query: str = Field(default="가능동 삼겹살", min_length=1, description="유저가 요청한 내용")
 
 
 class TokenUsageSummary(BaseModel):
