@@ -37,3 +37,15 @@ class SearchResultsEvaluationResult(BaseModel):
     quality_score: float = Field(..., description="검색 결과 품질 점수 (0.0-1.0)")
     reasoning: str = Field(..., description="평가 사고 과정")
 
+
+class BlogItemEvaluation(BaseModel):
+    """개별 블로그 항목 평가 결과"""
+    link: str = Field(..., description="블로그 링크 (고유 식별자)")
+    is_relevant: bool = Field(..., description="사용자 질문과 연관성이 있는지")
+    reasoning: str = Field(..., description="평가 이유 (최대 100자)")
+
+
+class BlogItemsEvaluationResult(BaseModel):
+    """여러 블로그 항목 평가 결과 모델"""
+    items: list[BlogItemEvaluation] = Field(..., description="각 항목별 평가 결과 리스트")
+

@@ -11,7 +11,10 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel
 
 from app.utils.llm_utils import llm_call, LLMRequest
-from app.schemas.llm_response_models import SearchResultsEvaluationResult
+from app.schemas.llm_response_models import (
+    SearchResultsEvaluationResult,
+    BlogItemsEvaluationResult
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,34 +240,39 @@ async def evaluate_naver_blog_results(
         }
 
 
-async def evaluate_individual_blog_item(
-    hit: dict,
+async def evaluate_all_blog_items(
+    hits: list[dict],
     original_query: str
 ) -> dict:
     """
-    개별 블로그 검색 결과 항목을 평가합니다.
+    모든 블로그 검색 결과 항목을 한 번의 AI API 호출로 평가합니다.
     
     Args:
-        hit: 검색 결과 항목 (title, link, description 포함)
+        hits: 검색 결과 항목 리스트 (title, link, description 포함)
         original_query: 원본 검색 쿼리
         
     Returns:
-        평가 결과 딕셔너리 (reason, pass 포함)
+        평가 결과 딕셔너리 (link를 key로 하는 각 항목별 평가 결과)
     """
-    title = hit.get("title", "")
-    description = hit.get("description", "")[:300]  # 설명은 300자로 제한
+    if not hits:
+        return {}
+    
+    # 모든 항목의 정보를 포맷팅 (최대 10개로 제한하여 토큰 절약)
+    items_text = "\n".join([
+        f"[{i+1}] 링크: {hit.get('link', 'N/A')}\n   제목: {hit.get('title', 'N/A')}\n   설명: {hit.get('description', 'N/A')[:200]}"
+        for i, hit in enumerate(hits[:10])  # 최대 10개만 평가
+    ])
     
     # 시스템 프롬프트
     system_prompt = """네이버 블로그 검색 결과 항목 평가 전문 AI. 맛집 검색 목적에 맞는 실용적 정보 제공 여부를 평가. 
-    JSON 응답: is_relevant(연관성), reasoning(평가 이유, 최대 100자로 간결하게 작성)."""
+    각 항목별로 link, is_relevant(연관성), reasoning(평가 이유, 최대 100자)를 포함한 JSON 응답."""
     
     # 사용자 프롬프트
-    user_prompt = f"""다음 네이버 블로그 검색 결과 항목을 평가하세요:
+    user_prompt = f"""다음 네이버 블로그 검색 결과 항목들을 평가하세요:
 
 사용자 질문: "{original_query}"
-검색 결과 항목:
-제목: {title}
-설명: {description}
+검색 결과 항목 (총 {len(hits)}개):
+{items_text}
 
 평가 기준:
 1. 위치 일치: 사용자가 요청한 위치(지역명)와 검색 결과의 위치가 일치하는가?
@@ -273,8 +281,8 @@ async def evaluate_individual_blog_item(
 4. 직접성: 제목과 설명 모두를 종합하여 평가. 제목이 일반적이어도 설명에 구체적 정보가 있으면 유용할 수 있음.
 5. 간접 언급 vs 직접 정보: 과거 경험 언급만 있는 경우보다 현재 맛집 정보를 직접 제공하는 경우를 우선 평가.
 
-이 항목이 사용자 질문과 연관성이 있고, 맛집 검색 목적에 실용적인 정보를 제공하는지 평가하세요.
-평가 이유(reasoning)는 최대 100자로 간결하게 작성하세요."""
+각 항목이 사용자 질문과 연관성이 있고, 맛집 검색 목적에 실용적인 정보를 제공하는지 평가하세요.
+각 항목의 평가 이유(reasoning)는 최대 50자로 간결하게 작성하세요."""
     
     try:
         llm_request: LLMRequest = {
@@ -282,24 +290,92 @@ async def evaluate_individual_blog_item(
             "system_prompt": system_prompt
         }
         
-        result, _ = await llm_call(llm_request, SearchResultsEvaluationResult)
+        result, _ = await llm_call(llm_request, BlogItemsEvaluationResult)
         
-        return {
-            "reason": result.reasoning,
-            "pass": result.is_relevant
-        }
+        # link를 key로 하는 딕셔너리로 변환
+        results = {}
+        for item in result.items:
+            results[item.link] = {
+                "reason": item.reasoning,
+                "pass": item.is_relevant
+            }
+        
+        logger.info(f"개별 블로그 항목 평가 완료: {len(results)}개 항목 평가")
+        
+        return results
     except Exception as e:
         logger.error(f"개별 블로그 항목 평가 실패: {str(e)}", exc_info=True)
         # 기본 평가: 제목이나 설명에 쿼리 키워드가 포함되어 있으면 pass
+        results = {}
         query_keywords = original_query.lower().split()
-        title_lower = title.lower()
-        desc_lower = description.lower()
-        has_keywords = any(keyword in title_lower or keyword in desc_lower for keyword in query_keywords)
         
+        for hit in hits:
+            link = hit.get("link", "")
+            if not link:
+                continue
+            
+            title = hit.get("title", "").lower()
+            description = hit.get("description", "").lower()
+            has_keywords = any(keyword in title or keyword in description for keyword in query_keywords)
+            
+            results[link] = {
+                "reason": f"평가 실패, 기본 평가: {'키워드 포함' if has_keywords else '키워드 미포함'}",
+                "pass": has_keywords
+            }
+        
+        return results
+
+
+def aggregate_evaluation_from_items(
+    items_evaluation: dict,
+    total_count: int
+) -> dict:
+    """
+    개별 항목 평가 결과를 종합하여 전체 평가를 도출합니다.
+    
+    Args:
+        items_evaluation: link를 key로 하는 개별 항목 평가 결과
+        total_count: 전체 검색 결과 개수
+        
+    Returns:
+        전체 평가 결과 딕셔너리 (is_relevant, is_sufficient, quality_score, reasoning)
+    """
+    if not items_evaluation:
         return {
-            "reason": f"평가 실패, 기본 평가 사용: {'키워드 포함' if has_keywords else '키워드 미포함'}",
-            "pass": has_keywords
+            "is_relevant": False,
+            "is_sufficient": False,
+            "quality_score": 0.0,
+            "reasoning": "평가할 항목이 없습니다."
         }
+    
+    # 통계 계산
+    total_items = len(items_evaluation)
+    passed_items = sum(1 for item in items_evaluation.values() if item.get("pass", False))
+    pass_rate = passed_items / total_items if total_items > 0 else 0.0
+    
+    # 전체 평가 도출
+    is_relevant = pass_rate >= 0.5  # 50% 이상이 pass면 relevant
+    is_sufficient = total_count >= 3  # 최소 3개 이상
+    quality_score = pass_rate  # pass 비율을 quality_score로 사용
+    
+    # reasoning 생성
+    if passed_items == 0:
+        reasoning = f"평가된 {total_items}개 항목 중 연관성 있는 항목이 없습니다."
+    elif passed_items == total_items:
+        reasoning = f"평가된 {total_items}개 항목 모두 연관성이 있습니다."
+    else:
+        reasoning = f"평가된 {total_items}개 항목 중 {passed_items}개({pass_rate*100:.0f}%)가 연관성이 있습니다."
+    
+    # 최대 150자로 제한
+    if len(reasoning) > 150:
+        reasoning = reasoning[:147] + "..."
+    
+    return {
+        "is_relevant": is_relevant,
+        "is_sufficient": is_sufficient,
+        "quality_score": quality_score,
+        "reasoning": reasoning
+    }
 
 
 async def execute_naver_blog_search(queries: list[str]) -> dict:
@@ -417,33 +493,38 @@ async def test_evaluate_naver_blog_results(
         original_query = "삼겹살 의정부"
     
     try:
-        # 전체 평가 수행
-        evaluation = await evaluate_naver_blog_results(
-            search_results=search_results,
-            original_query=original_query
-        )
-        
-        # 각 항목별 평가 수행
         hits = search_results.get("hits", [])
-        results = {}
         
+        # 모든 항목을 한 번의 AI API 호출로 평가
+        items_evaluation = await evaluate_all_blog_items(hits, original_query)
+        
+        # 평가 결과를 link를 key로 하는 형식으로 변환 (title, description 포함)
+        results = {}
         for hit in hits:
             link = hit.get("link", "")
             if not link:
                 continue
             
-            # 개별 항목 평가
-            item_evaluation = await evaluate_individual_blog_item(hit, original_query)
+            # 개별 평가 결과 가져오기 (없으면 기본값)
+            item_eval = items_evaluation.get(link, {
+                "reason": "평가되지 않음",
+                "pass": False
+            })
             
-            # link를 key로 하여 결과 저장
             results[link] = {
                 "title": hit.get("title", ""),
                 "description": hit.get("description", ""),
-                "reason": item_evaluation.get("reason", ""),
-                "pass": item_evaluation.get("pass", False)
+                "reason": item_eval.get("reason", ""),
+                "pass": item_eval.get("pass", False)
             }
         
-        logger.info(f"네이버 블로그 검색 결과 평가 완료: 전체 평가 및 {len(results)}개 항목 평가 완료")
+        # 개별 평가 결과를 종합하여 전체 평가 도출 (AI API 없이)
+        evaluation = aggregate_evaluation_from_items(
+            items_evaluation,
+            len(hits)
+        )
+        
+        logger.info(f"네이버 블로그 검색 결과 평가 완료: {len(results)}개 항목 평가 및 전체 평가 종합 완료")
         
         return {
             "evaluation": evaluation,
