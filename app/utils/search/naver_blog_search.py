@@ -23,6 +23,8 @@ MAX_DESCRIPTION_LENGTH = 150  # 프롬프트에 포함할 description 최대 길
 MAX_TITLE_LENGTH = 50  # 프롬프트에 포함할 title 최대 길이
 MIN_SUFFICIENT_COUNT = 3  # 충분한 검색 결과로 판단하는 최소 개수
 MAX_REASONING_LENGTH = 50  # 개별 항목 평가 이유 최대 길이
+MIN_RELEVANT_PASS_RATE = 0.6  # 연관성 있는 것으로 판단하는 최소 pass 비율 (60%)
+MIN_RELEVANT_ITEMS = 2  # 연관성 있는 것으로 판단하는 최소 pass 항목 수
 
 
 class NaverBlogSearchResult(BaseModel):
@@ -271,9 +273,14 @@ def aggregate_evaluation_from_items(
     pass_rate = passed_items / total_items if total_items > 0 else 0.0
     
     # 전체 평가 도출
-    is_relevant = pass_rate >= 0.5  # 50% 이상이 pass면 relevant
+    # is_relevant: pass 비율과 최소 항목 수 모두 고려 (더 엄격한 기준)
+    is_relevant = pass_rate >= MIN_RELEVANT_PASS_RATE and passed_items >= MIN_RELEVANT_ITEMS
     is_sufficient = total_count >= MIN_SUFFICIENT_COUNT  # 최소 개수 이상
-    quality_score = pass_rate  # pass 비율을 quality_score로 사용
+    
+    # quality_score: pass 비율(70%) + 결과 개수(30%)를 모두 고려
+    # 결과 개수가 많을수록 품질 점수에 가산점 (최대 10개까지)
+    count_score = min(total_count, 10) / 10.0  # 0.0 ~ 1.0
+    quality_score = round(pass_rate * 0.7 + count_score * 0.3, 2)
     
     # reasoning 생성
     if passed_items == 0:
