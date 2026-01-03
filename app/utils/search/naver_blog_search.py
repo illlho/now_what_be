@@ -17,6 +17,13 @@ from app.schemas.llm_response_models import (
 
 logger = logging.getLogger(__name__)
 
+# 평가 관련 상수
+MAX_ITEMS_FOR_EVALUATION = 10  # 한 번에 평가할 최대 항목 수
+MAX_DESCRIPTION_LENGTH = 150  # 프롬프트에 포함할 description 최대 길이
+MAX_TITLE_LENGTH = 50  # 프롬프트에 포함할 title 최대 길이
+MIN_SUFFICIENT_COUNT = 3  # 충분한 검색 결과로 판단하는 최소 개수
+MAX_REASONING_LENGTH = 50  # 개별 항목 평가 이유 최대 길이
+
 
 class NaverBlogSearchResult(BaseModel):
     """네이버 블로그 검색 결과 항목"""
@@ -170,32 +177,29 @@ async def evaluate_all_blog_items(
     if not hits:
         return {}
     
-    # 모든 항목의 정보를 포맷팅 (최대 10개로 제한하여 토큰 절약)
+    # 평가할 항목 제한 (토큰 절약)
+    items_to_evaluate = hits[:MAX_ITEMS_FOR_EVALUATION]
+    
+    # 항목 정보 포맷팅 (간소화된 포맷, 링크는 최소한만 포함)
     items_text = "\n".join([
-        f"[{i+1}] 링크: {hit.get('link', 'N/A')}\n   제목: {hit.get('title', 'N/A')}\n   설명: {hit.get('description', 'N/A')[:200]}"
-        for i, hit in enumerate(hits[:10])  # 최대 10개만 평가
+        f"{i+1}. {hit.get('link', 'N/A')}|{hit.get('title', 'N/A')[:MAX_TITLE_LENGTH]}|{hit.get('description', 'N/A')[:MAX_DESCRIPTION_LENGTH]}"
+        for i, hit in enumerate(items_to_evaluate)
     ])
     
-    # 시스템 프롬프트
-    system_prompt = """네이버 블로그 검색 결과 항목 평가 전문 AI. 맛집 검색 목적에 맞는 실용적 정보 제공 여부를 평가. 
-    각 항목별로 link, is_relevant(연관성), reasoning(평가 이유, 최대 100자)를 포함한 JSON 응답."""
+    # 시스템 프롬프트 (간소화, 200자 이내)
+    system_prompt = """맛집 검색 결과 평가 AI. 위치/음식종류 일치, 실용성 평가. 각 항목: link, is_relevant, reasoning(최대 50자)."""
     
-    # 사용자 프롬프트
-    user_prompt = f"""다음 네이버 블로그 검색 결과 항목들을 평가하세요:
-
-사용자 질문: "{original_query}"
-검색 결과 항목 (총 {len(hits)}개):
+    # 사용자 프롬프트 (간소화, 평가 기준 축소)
+    user_prompt = f"""사용자 질문: "{original_query}"
+검색 결과 ({len(hits)}개 중 {len(items_to_evaluate)}개 평가):
 {items_text}
 
 평가 기준:
-1. 위치 일치: 사용자가 요청한 위치(지역명)와 검색 결과의 위치가 일치하는가?
-2. 음식 종류 일치: 사용자가 요청한 음식 종류와 검색 결과의 음식 종류가 일치하는가?
-3. 실용성: 실제 맛집 정보(위치, 음식 종류, 맛집 이름 등)를 제공하는가?
-4. 직접성: 제목과 설명 모두를 종합하여 평가. 제목이 일반적이어도 설명에 구체적 정보가 있으면 유용할 수 있음.
-5. 간접 언급 vs 직접 정보: 과거 경험 언급만 있는 경우보다 현재 맛집 정보를 직접 제공하는 경우를 우선 평가.
+1. 위치 일치: 요청한 위치와 검색 결과 위치 일치 여부
+2. 음식 종류 일치: 요청한 음식 종류와 검색 결과 음식 종류 일치 여부
+3. 실용성: 실제 맛집 정보(위치, 음식종류, 맛집이름) 제공 여부
 
-각 항목이 사용자 질문과 연관성이 있고, 맛집 검색 목적에 실용적인 정보를 제공하는지 평가하세요.
-각 항목의 평가 이유(reasoning)는 최대 50자로 간결하게 작성하세요."""
+각 항목의 연관성과 실용성을 평가하세요. reasoning은 최대 {MAX_REASONING_LENGTH}자로 작성하세요."""
     
     try:
         llm_request: LLMRequest = {
@@ -268,7 +272,7 @@ def aggregate_evaluation_from_items(
     
     # 전체 평가 도출
     is_relevant = pass_rate >= 0.5  # 50% 이상이 pass면 relevant
-    is_sufficient = total_count >= 3  # 최소 3개 이상
+    is_sufficient = total_count >= MIN_SUFFICIENT_COUNT  # 최소 개수 이상
     quality_score = pass_rate  # pass 비율을 quality_score로 사용
     
     # reasoning 생성
