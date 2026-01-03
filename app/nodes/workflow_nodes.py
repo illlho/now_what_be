@@ -386,7 +386,7 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
             "parallel_search_results": {
                 "naver_map_results": {"items": []},
                 "naver_blog_results": {"items": []},
-                # "duckduckgo_search_results": {"queries": [], "count": 0, "hits": []},
+                "duckduckgo_search_results": {"items": []},
                 "combined_results": []
             }
         }
@@ -395,13 +395,13 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
     # 병렬 실행 함수 import
     from app.utils.search.naver_blog_search import execute_naver_blog_search
     from app.utils.search.naver_map_search import execute_naver_map_search
-    # from app.utils.search.duckduckgo_search import execute_duckduckgo_search
+    from app.utils.search.duckduckgo_search import execute_duckduckgo_search
     
     # 세 가지 검색 소스를 병렬로 실행
-    naver_blog_result, naver_map_result = await asyncio.gather(
+    naver_blog_result, naver_map_result, duckduckgo_search_result = await asyncio.gather(
         execute_naver_blog_search(search_queries),
         execute_naver_map_search(search_queries),
-        # execute_duckduckgo_search(search_queries),
+        execute_duckduckgo_search(search_queries),
         return_exceptions=True
     )
     
@@ -414,9 +414,9 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
         logger.error(f"네이버 지도 검색 실패: {str(naver_map_result)}")
         naver_map_result = {"items": []}
     
-    # if isinstance(duckduckgo_search_result, Exception):
-    #     logger.error(f"DuckDuckGo 검색 실패: {str(duckduckgo_search_result)}")
-    #     duckduckgo_search_result = {"queries": search_queries, "count": 0, "hits": []}
+    if isinstance(duckduckgo_search_result, Exception):
+        logger.error(f"DuckDuckGo 검색 실패: {str(duckduckgo_search_result)}")
+        duckduckgo_search_result = {"items": []}
     
     # 검색 결과 통합
     combined_results = []
@@ -458,28 +458,32 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
         ])
     
     # DuckDuckGo 검색 결과 추가
-    # if duckduckgo_search_result.get("hits"):
-    #     combined_results.extend([
-    #         {
-    #             "source": "duckduckgo",
-    #             **hit
-    #         }
-    #         for hit in duckduckgo_search_result["hits"]
-    #     ])
+    if duckduckgo_search_result.get("items"):
+        combined_results.extend([
+            {
+                "source": "duckduckgo",
+                "title": item.get("title", ""),
+                "link": item.get("link", ""),
+                "description": item.get("description", ""),
+                "pass": item.get("pass", True),  # 통과 여부
+                "reason": item.get("reason", "DuckDuckGo 검색 알고리즘 신뢰")  # 통과 이유
+            }
+            for item in duckduckgo_search_result["items"]
+        ])
     
     # 결과 저장
     result_dict["parallel_search_results"] = {
         "naver_map_results": naver_map_result,
         "naver_blog_results": naver_blog_result,
-        # "duckduckgo_search_results": duckduckgo_search_result,
+        "duckduckgo_search_results": duckduckgo_search_result,
         "combined_results": combined_results
     }
     
     logger.info(
         f"병렬 검색 완료: "
         f"지도={len(naver_map_result.get('items', []))}개, "
-        f"블로그={len(naver_blog_result.get('items', []))}개"
-        # f"DuckDuckGo={duckduckgo_search_result.get('count', 0)}개"
+        f"블로그={len(naver_blog_result.get('items', []))}개, "
+        f"DuckDuckGo={len(duckduckgo_search_result.get('items', []))}개"
     )
     
     # 상태 업데이트
