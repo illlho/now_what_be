@@ -324,13 +324,15 @@ async def execute_naver_blog_search(queries: list[str]) -> dict:
     네이버 블로그 검색 실행 함수 (병렬 실행용)
     
     검색을 수행하고 결과를 AI API로 평가합니다.
-    개별 항목 평가 후 종합하여 전체 평가를 도출합니다.
+    각 포스트별 평가 결과를 리스트로 반환합니다.
     
     Args:
         queries: 검색 쿼리 리스트
         
     Returns:
-        검색 결과 딕셔너리 (evaluation 필드 포함, 예외 발생 시 빈 결과 반환)
+        검색 결과 딕셔너리:
+        - items: 각 포스트별 평가 결과 리스트
+          - 각 항목: title, link, description, bloggername, postdate, pass(통과여부), reason(통과이유)
     """
     try:
         # 검색 수행
@@ -342,40 +344,46 @@ async def execute_naver_blog_search(queries: list[str]) -> dict:
         hits = search_results.get("hits", [])
         
         if not hits:
-            # 검색 결과가 없으면 기본 평가 반환
-            search_results["evaluation"] = {
-                "is_relevant": False,
-                "is_sufficient": False,
-                "quality_score": 0.0,
-                "reasoning": "검색 결과가 없습니다."
+            # 검색 결과가 없으면 빈 리스트 반환
+            return {
+                "items": []
             }
-            return search_results
         
         # 모든 항목을 한 번의 AI API 호출로 평가
         items_evaluation = await evaluate_all_blog_items(hits, original_query)
         
-        # 개별 평가 결과를 종합하여 전체 평가 도출 (AI API 없이)
-        evaluation = aggregate_evaluation_from_items(
-            items_evaluation,
-            len(hits)
-        )
+        # 각 포스트별 평가 결과 리스트 생성 (블로그 상세 내용 + 평가 정보)
+        evaluated_items = []
+        for hit in hits:
+            link = hit.get("link", "")
+            if not link:
+                continue
+            
+            # 개별 평가 결과 가져오기 (없으면 기본값)
+            item_eval = items_evaluation.get(link, {
+                "reason": "평가되지 않음",
+                "pass": False
+            })
+            
+            # 블로그 상세 내용 + 평가 정보 결합
+            evaluated_items.append({
+                "title": hit.get("title", ""),
+                "link": link,
+                "description": hit.get("description", ""),
+                "bloggername": hit.get("bloggername"),
+                "bloggerlink": hit.get("bloggerlink"),
+                "postdate": hit.get("postdate"),
+                "pass": item_eval.get("pass", False),  # 통과 여부
+                "reason": item_eval.get("reason", "")  # 통과 이유
+            })
         
-        # 평가 결과를 검색 결과에 추가
-        search_results["evaluation"] = evaluation
-        
-        return search_results
+        return {
+            "items": evaluated_items
+        }
     except Exception as e:
         logger.error(f"네이버 블로그 검색 실패: {str(e)}", exc_info=True)
         return {
-            "queries": queries[:3] if queries else [],
-            "count": 0,
-            "hits": [],
-            "evaluation": {
-                "is_relevant": False,
-                "is_sufficient": False,
-                "quality_score": 0.0,
-                "reasoning": f"검색 실패: {str(e)}"
-            }
+            "items": []
         }
 
 

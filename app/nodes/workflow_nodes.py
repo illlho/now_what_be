@@ -394,86 +394,89 @@ async def parallel_search_node(state: WorkflowState) -> WorkflowState:
     
     # 병렬 실행 함수 import
     from app.utils.search.naver_blog_search import execute_naver_blog_search
-    from app.utils.search.naver_map_search import execute_naver_map_search
-    from app.utils.search.duckduckgo_search import execute_duckduckgo_search
+    # from app.utils.search.naver_map_search import execute_naver_map_search
+    # from app.utils.search.duckduckgo_search import execute_duckduckgo_search
     
     # 세 가지 검색 소스를 병렬로 실행
-    naver_blog_result, naver_map_result, duckduckgo_search_result = await asyncio.gather(
-        execute_naver_blog_search(search_queries),
-        execute_naver_map_search(search_queries),
-        execute_duckduckgo_search(search_queries),
-        return_exceptions=True
-    )
+    naver_blog_result = await execute_naver_blog_search(search_queries)
+    # naver_blog_result, naver_map_result, duckduckgo_search_result = await asyncio.gather(
+    #     execute_naver_blog_search(search_queries),
+    #     # execute_naver_map_search(search_queries),
+    #     # execute_duckduckgo_search(search_queries),
+    #     return_exceptions=True
+    # )
     
     # 예외 처리 (각 함수 내부에서 처리하지만, asyncio.gather의 return_exceptions로 인한 예외도 처리)
     if isinstance(naver_blog_result, Exception):
         logger.error(f"네이버 블로그 검색 실패: {str(naver_blog_result)}")
-        naver_blog_result = {"queries": search_queries, "count": 0, "hits": []}
+        naver_blog_result = {"items": []}
     
-    if isinstance(naver_map_result, Exception):
-        logger.error(f"네이버 지도 검색 실패: {str(naver_map_result)}")
-        naver_map_result = {"queries": search_queries, "count": 0, "hits": []}
+    # if isinstance(naver_map_result, Exception):
+    #     logger.error(f"네이버 지도 검색 실패: {str(naver_map_result)}")
+    #     naver_map_result = {"queries": search_queries, "count": 0, "hits": []}
     
-    if isinstance(duckduckgo_search_result, Exception):
-        logger.error(f"DuckDuckGo 검색 실패: {str(duckduckgo_search_result)}")
-        duckduckgo_search_result = {"queries": search_queries, "count": 0, "hits": []}
+    # if isinstance(duckduckgo_search_result, Exception):
+    #     logger.error(f"DuckDuckGo 검색 실패: {str(duckduckgo_search_result)}")
+    #     duckduckgo_search_result = {"queries": search_queries, "count": 0, "hits": []}
     
     # 검색 결과 통합
     combined_results = []
     
     # 네이버 지도 결과 추가
-    if naver_map_result.get("hits"):
-        combined_results.extend([
-            {
-                "source": "naver_map",
-                "title": hit.get("title", ""),
-                "link": hit.get("link"),
-                "category": hit.get("category"),
-                "description": hit.get("description"),
-                "telephone": hit.get("telephone"),
-                "address": hit.get("address"),
-                "roadAddress": hit.get("roadAddress"),
-            }
-            for hit in naver_map_result["hits"]
-        ])
+    # if naver_map_result.get("hits"):
+    #     combined_results.extend([
+    #         {
+    #             "source": "naver_map",
+    #             "title": hit.get("title", ""),
+    #             "link": hit.get("link"),
+    #             "category": hit.get("category"),
+    #             "description": hit.get("description"),
+    #             "telephone": hit.get("telephone"),
+    #             "address": hit.get("address"),
+    #             "roadAddress": hit.get("roadAddress"),
+    #         }
+    #         for hit in naver_map_result["hits"]
+    #     ])
     
     # 네이버 블로그 결과 추가
-    if naver_blog_result.get("hits"):
+    if naver_blog_result.get("items"):
         combined_results.extend([
             {
                 "source": "naver_blog",
-                "title": hit.get("title", ""),
-                "link": hit.get("link", ""),
-                "description": hit.get("description", ""),
-                "bloggername": hit.get("bloggername"),
-                "postdate": hit.get("postdate"),
+                "title": item.get("title", ""),
+                "link": item.get("link", ""),
+                "description": item.get("description", ""),
+                "bloggername": item.get("bloggername"),
+                "postdate": item.get("postdate"),
+                "pass": item.get("pass", False),  # 통과 여부
+                "reason": item.get("reason", "")  # 통과 이유
             }
-            for hit in naver_blog_result["hits"]
+            for item in naver_blog_result["items"]
         ])
     
     # DuckDuckGo 검색 결과 추가
-    if duckduckgo_search_result.get("hits"):
-        combined_results.extend([
-            {
-                "source": "duckduckgo",
-                **hit
-            }
-            for hit in duckduckgo_search_result["hits"]
-        ])
+    # if duckduckgo_search_result.get("hits"):
+    #     combined_results.extend([
+    #         {
+    #             "source": "duckduckgo",
+    #             **hit
+    #         }
+    #         for hit in duckduckgo_search_result["hits"]
+    #     ])
     
     # 결과 저장
     result_dict["parallel_search_results"] = {
-        "naver_map_results": naver_map_result,
+        # "naver_map_results": naver_map_result,
         "naver_blog_results": naver_blog_result,
-        "duckduckgo_search_results": duckduckgo_search_result,
+        # "duckduckgo_search_results": duckduckgo_search_result,
         "combined_results": combined_results
     }
     
     logger.info(
         f"병렬 검색 완료: "
-        f"지도={naver_map_result.get('count', 0)}개, "
-        f"블로그={naver_blog_result.get('count', 0)}개, "
-        f"DuckDuckGo={duckduckgo_search_result.get('count', 0)}개"
+        # f"지도={naver_map_result.get('count', 0)}개, "
+        f"블로그={len(naver_blog_result.get('items', []))}개"
+        # f"DuckDuckGo={duckduckgo_search_result.get('count', 0)}개"
     )
     
     # 상태 업데이트
