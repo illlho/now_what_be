@@ -17,6 +17,40 @@ from app.schemas.llm_response_models import (
 
 logger = logging.getLogger(__name__)
 
+
+def _get_default_evaluation(hits: list[dict], original_query: str) -> dict:
+    """
+    기본 평가 로직 (에러 처리용)
+    
+    AI API 호출 실패 시 키워드 매칭을 통한 기본 평가를 수행합니다.
+    
+    Args:
+        hits: 검색 결과 항목 리스트 (title, link, description 포함)
+        original_query: 원본 검색 쿼리
+        
+    Returns:
+        평가 결과 딕셔너리 (link를 key로 하는 각 항목별 평가 결과)
+    """
+    results = {}
+    query_keywords = original_query.lower().split()
+    
+    for hit in hits:
+        link = hit.get("link", "")
+        if not link:
+            continue
+        
+        title = hit.get("title", "").lower()
+        description = hit.get("description", "").lower()
+        has_keywords = any(keyword in title or keyword in description for keyword in query_keywords)
+        
+        results[link] = {
+            "reason": f"평가 실패, 기본 평가: {'키워드 포함' if has_keywords else '키워드 미포함'}",
+            "pass": has_keywords
+        }
+    
+    return results
+
+
 # 평가 관련 상수
 MAX_ITEMS_FOR_EVALUATION = 10  # 한 번에 평가할 최대 항목 수
 MAX_DESCRIPTION_LENGTH = 150  # 프롬프트에 포함할 description 최대 길이
@@ -224,25 +258,8 @@ async def evaluate_all_blog_items(
         return results
     except Exception as e:
         logger.error(f"개별 블로그 항목 평가 실패: {str(e)}", exc_info=True)
-        # 기본 평가: 제목이나 설명에 쿼리 키워드가 포함되어 있으면 pass
-        results = {}
-        query_keywords = original_query.lower().split()
-        
-        for hit in hits:
-            link = hit.get("link", "")
-            if not link:
-                continue
-            
-            title = hit.get("title", "").lower()
-            description = hit.get("description", "").lower()
-            has_keywords = any(keyword in title or keyword in description for keyword in query_keywords)
-            
-            results[link] = {
-                "reason": f"평가 실패, 기본 평가: {'키워드 포함' if has_keywords else '키워드 미포함'}",
-                "pass": has_keywords
-            }
-        
-        return results
+        # 기본 평가 로직 사용
+        return _get_default_evaluation(hits, original_query)
 
 
 def aggregate_evaluation_from_items(
@@ -442,6 +459,7 @@ async def test_evaluate_naver_blog_results(
         items_evaluation = await evaluate_all_blog_items(hits, original_query)
         
         # 평가 결과를 link를 key로 하는 형식으로 변환 (title, description 포함)
+        # 한 번의 순회로 처리하여 성능 최적화
         results = {}
         for hit in hits:
             link = hit.get("link", "")
