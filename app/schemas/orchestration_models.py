@@ -28,10 +28,3 @@ class OrchestrationResponse(BaseModel):
     query: str
     success: bool = True
     token_usage: Optional[TokenUsageSummary] = Field(None, description="토큰 사용량 및 비용 정보")
-
-
-class GraphVisualizationResponse(BaseModel):
-    """그래프 시각화 응답 모델"""
-    mermaid_code: str = Field(..., description="Mermaid 다이어그램 코드")
-    ascii_art: str = Field(..., description="ASCII 아트 표현")
-

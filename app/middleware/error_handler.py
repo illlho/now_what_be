@@ -6,7 +6,7 @@ from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.exceptions import BaseAPIException, APIKeyError, AgentError, ConfigurationError, ValidationError
+from app.exceptions import BaseAPIException, APIKeyError, ConfigurationError, ValidationError
 from app.schemas.error import ErrorResponse, ValidationErrorResponse, ErrorDetail, ValidationErrorDetail
 from app.constants.error_codes import ErrorCode
 

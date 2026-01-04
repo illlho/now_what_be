@@ -8,16 +8,8 @@ from fastapi.openapi.docs import get_swagger_ui_html
 # OpenAPI 태그 메타데이터 정의
 TAGS_METADATA = [
     {
-        "name": "health",
-        "description": "서비스 상태 확인 및 헬스 체크 엔드포인트",
-    },
-    {
-        "name": "agent",
-        "description": "LangGraph를 활용한 AI Agent 관련 엔드포인트. AI 대화 및 텍스트 분석 기능을 제공합니다.",
-    },
-    {
         "name": "orchestration",
-        "description": "여러 Agent 작업을 조율하고 워크플로우를 관리하는 오케스트레이션 엔드포인트. 순차/병렬 작업 실행, 배치 처리 등을 지원합니다.",
+        "description": "맛집 검색 워크플로우 관리 오케스트레이션 엔드포인트",
     },
 ]
 

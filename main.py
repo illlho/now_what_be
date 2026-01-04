@@ -4,12 +4,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.routers import agent_router, health_router, orchestration_router
+from app.routers import orchestration_router
 from app.config import settings
 from app.exceptions import (
     BaseAPIException,
     APIKeyError,
-    AgentError,
     ConfigurationError,
     ValidationError
 )
@@ -51,7 +50,7 @@ async def lifespan(app: FastAPI):
     if not settings.openai_api_key:
         logger.warning(
             "⚠️  OPENAI_API_KEY가 설정되지 않았습니다. "
-            "Agent 기능을 사용하려면 .env 파일에 OPENAI_API_KEY를 설정하세요."
+            "LLM 기능을 사용하려면 .env 파일에 OPENAI_API_KEY를 설정하세요."
         )
     else:
         logger.info("✓ OpenAI API 키가 설정되었습니다.")
@@ -66,13 +65,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Now What Backend API",
     description="""
-    LangGraph를 활용한 AI Agent 백엔드 서비스
+    맛집 검색 백엔드 서비스
     
     ## 주요 기능
     
-    * **AI Agent 대화**: LangGraph 기반 AI Agent와 실시간 대화
-    * **텍스트 분석**: 입력된 텍스트의 분석 및 처리
-    * **Health Check**: 서비스 상태 모니터링
+    * **맛집 검색**: 네이버 블로그 기반 맛집 검색 및 평가
     
     ## 인증
     
@@ -127,7 +124,6 @@ app.add_middleware(LoggingMiddleware)
 # 예외 핸들러 등록
 app.add_exception_handler(BaseAPIException, base_exception_handler)
 app.add_exception_handler(APIKeyError, base_exception_handler)
-app.add_exception_handler(AgentError, base_exception_handler)
 app.add_exception_handler(ConfigurationError, base_exception_handler)
 app.add_exception_handler(ValidationError, base_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -135,8 +131,6 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
 # 라우터 등록
-app.include_router(health_router.router)
-app.include_router(agent_router.router)
 app.include_router(orchestration_router.router)
 
 
