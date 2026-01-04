@@ -9,14 +9,37 @@ from pydantic import BaseModel, Field
 
 class UserLocation(BaseModel):
     """사용자 위치 좌표 모델"""
-    latitude: float = Field(..., description="위도")
-    longitude: float = Field(..., description="경도")
+    latitude: float = Field(..., description="위도", example=37.74608637371771)
+    longitude: float = Field(..., description="경도", example=127.03254389562254)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "latitude": 37.74608637371771,
+                "longitude": 127.03254389562254
+            }
+        }
 
 
 class UserRequest(BaseModel):
     """유저의 요청 모델"""
-    query: str = Field(..., min_length=1, description="유저가 요청한 내용")
-    location: Optional[UserLocation] = Field(None, description="사용자 위치 좌표 (선택)")
+    query: str = Field(..., min_length=1, description="유저가 요청한 내용", example="가능동 삼겹살")
+    location: Optional[UserLocation] = Field(
+        None,
+        description="사용자 위치 좌표 (선택)",
+        example={"latitude": 37.74608637371771, "longitude": 127.03254389562254}
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "가능동 삼겹살",
+                "location": {
+                    "latitude": 37.74608637371771,
+                    "longitude": 127.03254389562254
+                }
+            }
+        }
 
 
 class TokenUsageSummary(BaseModel):

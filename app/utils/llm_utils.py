@@ -11,6 +11,8 @@ from pydantic import BaseModel
 import logging
 import tiktoken
 import json
+from app.config import settings
+from app.exceptions import APIKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +46,15 @@ def get_model() -> ChatOpenAI:
     
     Returns:
         ChatOpenAI: 초기화된 LLM 모델 인스턴스
+        
+    Raises:
+        APIKeyError: OpenAI API 키가 설정되지 않은 경우
     """
     global _model
     if _model is None:
-        _model = ChatOpenAI(model="gpt-4o-mini")
+        # API 키 검증
+        api_key = settings.validate_openai_key()
+        _model = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
     return _model
 
 

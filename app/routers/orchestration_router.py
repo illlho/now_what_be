@@ -9,7 +9,7 @@ import logging
 
 from app.schemas.orchestration_models import UserRequest, OrchestrationResponse
 from app.schemas.workflow_state import WorkflowState
-from app.nodes.workflow_nodes import receive_user_input_node
+from app.nodes.workflow_nodes import receive_user_input_node, analyze_user_query_node
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/orchestration", tags=["orchestration"])
@@ -22,12 +22,30 @@ def create_workflow_graph() -> StateGraph:
     
     # 노드 추가
     workflow.add_node("receiveUserInput", receive_user_input_node)
+    workflow.add_node("analyzeUserQuery", analyze_user_query_node)
     
     # 엔트리 포인트 설정
     workflow.set_entry_point("receiveUserInput")
     
-    # 엔드 포인트 연결
-    workflow.add_edge("receiveUserInput", END)
+    # 엣지 연결
+    workflow.add_edge("receiveUserInput", "analyzeUserQuery")
+    
+    # 조건부 엣지: 관련 없는 질문이면 종료
+    def should_continue(state: WorkflowState) -> str:
+        """워크플로우 계속 진행 여부 결정"""
+        is_relevant = state.get("is_relevant", True)
+        if not is_relevant:
+            return "end"
+        return "continue"
+    
+    workflow.add_conditional_edges(
+        "analyzeUserQuery",
+        should_continue,
+        {
+            "end": END,
+            "continue": END  # TODO: 다음 노드로 연결 (현재는 종료)
+        }
+    )
     
     return workflow.compile()
 
@@ -60,16 +78,49 @@ async def orchestrate_search(request: UserRequest):
         result_state = await workflow_graph.ainvoke(initial_state)
         
         # 응답 생성
+        is_relevant = result_state.get("is_relevant", True)
+        steps = result_state.get("steps", [])
+        
+        # 에러가 발생한 스텝이 있는지 확인
+        has_error = any(step.get("status") == "error" for step in steps)
+        error_message = None
+        if has_error:
+            # 마지막 에러 스텝의 에러 메시지 가져오기
+            error_steps = [step for step in steps if step.get("status") == "error"]
+            if error_steps:
+                error_message = error_steps[-1].get("error") or error_steps[-1].get("message")
+        
+        # 메시지 결정
+        if has_error:
+            message = f"워크플로우 실행 중 오류 발생: {error_message}" if error_message else "워크플로우 실행 중 오류 발생"
+        elif not is_relevant:
+            message = "맛집 검색과 관련 없는 질문입니다"
+        else:
+            message = "워크플로우 실행 완료"
+        
+        result_dict = {
+            "message": message,
+            "user_query": result_state.get("user_query"),
+            "user_location": result_state.get("user_location"),
+            "is_relevant": is_relevant,
+            "has_error": has_error,
+            "steps": steps,  # 스텝별 처리 결과 포함
+            "total_steps": len(steps),
+        }
+        
+        # 관련 있는 질문이고 에러가 없는 경우 분석 결과 포함
+        if is_relevant and not has_error:
+            result_dict.update({
+                "location_keyword": result_state.get("location_keyword"),
+                "food_keyword": result_state.get("food_keyword"),
+                "resolved_location": result_state.get("resolved_location"),
+                "search_query": result_state.get("search_query"),
+            })
+        
         return OrchestrationResponse(
-            result_dict={
-                "message": "워크플로우 실행 완료",
-                "user_query": result_state.get("user_query"),
-                "user_location": result_state.get("user_location"),
-                "steps": result_state.get("steps", []),  # 스텝별 처리 결과 포함
-                "total_steps": len(result_state.get("steps", [])),
-            },
+            result_dict=result_dict,
             query=result_state.get("user_query", ""),
-            success=True,
+            success=not has_error,  # 에러가 있으면 success=False
         )
         
     except Exception as e:
