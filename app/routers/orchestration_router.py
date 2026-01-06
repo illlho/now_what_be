@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from langgraph.graph import StateGraph, END
 import logging
 
-from app.schemas.orchestration_models import UserRequest, OrchestrationResponse
+from app.schemas.orchestration_models import UserRequest, OrchestrationResponse, ReverseGeocodeResult
 from app.schemas.workflow_state import WorkflowState
 from app.nodes.workflow_nodes import receive_user_input_node, analyze_user_query_node
 
@@ -114,13 +114,21 @@ async def orchestrate_search(request: UserRequest):
                 "location_keyword": result_state.get("location_keyword"),
                 "food_keyword": result_state.get("food_keyword"),
                 "resolved_location": result_state.get("resolved_location"),
+                "reverse_geocode_result": result_state.get("reverse_geocode_result"),
                 "search_query": result_state.get("search_query"),
             })
+        
+        # 역지오코딩 결과를 최상위 레벨에도 포함
+        reverse_geocode_result = None
+        reverse_geocode_dict = result_state.get("reverse_geocode_result")
+        if reverse_geocode_dict:
+            reverse_geocode_result = ReverseGeocodeResult(**reverse_geocode_dict)
         
         return OrchestrationResponse(
             result_dict=result_dict,
             query=result_state.get("user_query", ""),
             success=not has_error,  # 에러가 있으면 success=False
+            reverse_geocode_result=reverse_geocode_result,
         )
         
     except Exception as e:

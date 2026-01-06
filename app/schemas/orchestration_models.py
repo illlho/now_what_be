@@ -52,9 +52,20 @@ class TokenUsageSummary(BaseModel):
     node_breakdown: list[dict] = Field(default_factory=list, description="노드별 토큰 사용량 상세")
 
 
+class ReverseGeocodeResult(BaseModel):
+    """역지오코딩 결과 모델"""
+    location_keyword: Optional[str] = Field(None, description="위치 키워드 (예: 명동, 강남구)")
+    depth_1: Optional[str] = Field(None, description="시/도 (예: 서울특별시)")
+    depth_2: Optional[str] = Field(None, description="시/군/구 (예: 중구)")
+    depth_3: Optional[str] = Field(None, description="읍/면/동 (예: 명동)")
+    depth_4: Optional[str] = Field(None, description="상세 지역 (예: 태평로1가)")
+    address: Optional[str] = Field(None, description="전체 주소")
+
+
 class OrchestrationResponse(BaseModel):
     """오케스트레이션 응답 모델"""
     result_dict: dict = Field(..., description="평가 결과 (dict 형태)")
     query: str
     success: bool = True
     token_usage: Optional[TokenUsageSummary] = Field(None, description="토큰 사용량 및 비용 정보")
+    reverse_geocode_result: Optional[ReverseGeocodeResult] = Field(None, description="역지오코딩 결과")

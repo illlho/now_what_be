@@ -147,18 +147,22 @@ async def analyze_user_query_node(state: WorkflowState) -> WorkflowState:
         user_prompt = f"""질문: "{user_query}"
 
 위치 키워드 추출 예시:
-- "가능동 삼겹살" → location_keyword="가능동", food_keyword="삼겹살"
-- "강남역 파스타" → location_keyword="강남역", food_keyword="파스타"
-- "홍대 맛집" → location_keyword="홍대", food_keyword=null
-- "근처 카페" → location_keyword=null, needs_location_resolution=true
+- "가능동 삼겹살" → location_keyword="가능동", food_keyword="삼겹살", needs_location_resolution=false
+- "강남역 파스타" → location_keyword="강남역", food_keyword="파스타", needs_location_resolution=false
+- "홍대 맛집" → location_keyword="홍대", food_keyword=null, needs_location_resolution=false
+- "근처 카페" → location_keyword=null, food_keyword="카페", needs_location_resolution=true
+- "근처 삼겹살" → location_keyword=null, food_keyword="삼겹살", needs_location_resolution=true
+- "주변 맛집" → location_keyword=null, food_keyword=null, needs_location_resolution=true
 
 분석:
 1. 맛집 검색 관련 여부
 2. 위치 키워드 추출 (동명, 역명, 지역명 모두 포함)
 3. 음식/카테고리 키워드 추출
-4. '근처'/'주변'만 있으면 needs_location_resolution=true
+4. '근처'/'주변'/'여기' 등이 있으면 반드시 needs_location_resolution=true
 
 관련 없으면 is_relevant=false.
+
+중요: '근처', '주변', '여기' 등이 있으면 반드시 needs_location_resolution=true로 설정하세요.
 
 reason은 50자 이내로 간결하게 작성하세요."""
         
@@ -171,7 +175,8 @@ reason은 50자 이내로 간결하게 작성하세요."""
         
         logger.info(f"분석 결과: 관련성={analysis_result.is_relevant}, "
                    f"위치={analysis_result.location_keyword}, "
-                   f"음식={analysis_result.food_keyword}")
+                   f"음식={analysis_result.food_keyword}, "
+                   f"needs_location_resolution={analysis_result.needs_location_resolution}")
         
         # 상태 업데이트
         state["is_relevant"] = analysis_result.is_relevant
@@ -197,18 +202,33 @@ reason은 50자 이내로 간결하게 작성하세요."""
         
         # 위치 키워드가 없거나 '근처'인 경우 좌표로 주소 조회
         resolved_location = None
+        reverse_geocode_result = None
         if analysis_result.needs_location_resolution and user_location:
             latitude = user_location.get("latitude")
             longitude = user_location.get("longitude")
             
             if latitude and longitude:
-                logger.info(f"좌표로 주소 조회: ({latitude}, {longitude})")
-                geocode_result = await reverse_geocode(latitude, longitude)
-                
-                if geocode_result:
-                    resolved_location = geocode_result.get("location_keyword")
-                    logger.info(f"조회된 위치 키워드: {resolved_location}")
-                    state["resolved_location"] = resolved_location
+                logger.info(f"좌표로 주소 조회 시작: ({latitude}, {longitude})")
+                try:
+                    geocode_result = await reverse_geocode(latitude, longitude)
+                    
+                    if geocode_result:
+                        resolved_location = geocode_result.get("location_keyword")
+                        reverse_geocode_result = geocode_result  # 전체 역지오코딩 결과 저장
+                        logger.info(f"✅ 조회된 위치 키워드: {resolved_location}")
+                        state["resolved_location"] = resolved_location
+                        state["reverse_geocode_result"] = reverse_geocode_result
+                    else:
+                        logger.warning(f"⚠️  역지오코딩 결과가 None입니다.")
+                except Exception as e:
+                    logger.error(f"❌ 역지오코딩 중 오류 발생: {str(e)}", exc_info=True)
+            else:
+                logger.warning("위도 또는 경도가 없습니다.")
+        else:
+            if not analysis_result.needs_location_resolution:
+                logger.info("needs_location_resolution이 false이므로 역지오코딩을 건너뜁니다.")
+            if not user_location:
+                logger.info("user_location이 없어서 역지오코딩을 건너뜁니다.")
         
         # 최종 위치 키워드 결정
         final_location = analysis_result.location_keyword or resolved_location
@@ -240,7 +260,9 @@ reason은 50자 이내로 간결하게 작성하세요."""
                 "is_relevant": analysis_result.is_relevant,
                 "location_keyword": analysis_result.location_keyword,
                 "food_keyword": analysis_result.food_keyword,
+                "needs_location_resolution": analysis_result.needs_location_resolution,
                 "resolved_location": resolved_location,
+                "reverse_geocode_result": reverse_geocode_result,
                 "search_query": search_query,
                 "reason": analysis_result.reason,
                 "token_usage": {

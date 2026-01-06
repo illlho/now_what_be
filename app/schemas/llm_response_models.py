@@ -33,6 +33,6 @@ class QueryAnalysisResult(BaseModel):
     )
     needs_location_resolution: bool = Field(
         False, 
-        description="좌표를 통해 위치를 조회해야 하는지. '근처', '주변', '여기' 등 위치 키워드가 없을 때만 true"
+        description="좌표를 통해 위치를 조회해야 하는지. '근처', '주변', '여기' 등이 있거나 위치 키워드가 없으면 반드시 true"
     )
     reason: str = Field(..., description="분석 이유 (최대 50자)")

@@ -21,6 +21,7 @@ class WorkflowState(TypedDict, total=False):
     location_keyword: Optional[str]  # 추출된 위치 키워드
     food_keyword: Optional[str]  # 추출된 음식/카테고리 키워드
     resolved_location: Optional[str]  # 좌표로부터 조회한 위치 키워드
+    reverse_geocode_result: Optional[Dict[str, Any]]  # 역지오코딩 전체 결과 (주소 정보 포함)
     search_query: Optional[str]  # 최종 검색용 쿼리
     
     # 워크플로우 실행 스텝 기록
