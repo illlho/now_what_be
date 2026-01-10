@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.routers import orchestration_router
+from app.routers import orchestration_router, agent_router
 from app.config import settings
 from app.exceptions import (
     BaseAPIException,
@@ -132,6 +132,7 @@ app.add_exception_handler(Exception, general_exception_handler)
 
 # 라우터 등록
 app.include_router(orchestration_router.router)
+app.include_router(agent_router.router)
 
 
 # Swagger UI 커스터마이징 적용
