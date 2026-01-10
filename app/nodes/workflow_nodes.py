@@ -146,23 +146,24 @@ async def analyze_user_query_node(state: WorkflowState) -> WorkflowState:
         
         user_prompt = f"""질문: "{user_query}"
 
+[중요] 관대한 정책: 맛집/음식/장소 관련이면 무조건 통과. 위치/음식 키워드 없어도 진행.
+완전 무관한 경우에만 is_relevant=false (예: 날씨, 주식, 뉴스).
+
 위치 키워드 추출 예시:
 - "가능동 삼겹살" → location_keyword="가능동", food_keyword="삼겹살", needs_location_resolution=false
 - "강남역 파스타" → location_keyword="강남역", food_keyword="파스타", needs_location_resolution=false
 - "홍대 맛집" → location_keyword="홍대", food_keyword=null, needs_location_resolution=false
 - "근처 카페" → location_keyword=null, food_keyword="카페", needs_location_resolution=true
-- "근처 삼겹살" → location_keyword=null, food_keyword="삼겹살", needs_location_resolution=true
+- "맛집 추천" → location_keyword=null, food_keyword=null, needs_location_resolution=true
 - "주변 맛집" → location_keyword=null, food_keyword=null, needs_location_resolution=true
 
 분석:
-1. 맛집 검색 관련 여부
+1. 맛집/음식/장소 관련이면 is_relevant=true (관대하게)
 2. 위치 키워드 추출 (동명, 역명, 지역명 모두 포함)
 3. 음식/카테고리 키워드 추출
-4. '근처'/'주변'/'여기' 등이 있으면 반드시 needs_location_resolution=true
+4. 위치 키워드 없거나 '근처'/'주변'이면 needs_location_resolution=true
 
-관련 없으면 is_relevant=false.
-
-중요: '근처', '주변', '여기' 등이 있으면 반드시 needs_location_resolution=true로 설정하세요.
+완전 무관 예시: "오늘 날씨 어때?", "주식 시세", "뉴스 보여줘" → is_relevant=false
 
 reason은 50자 이내로 간결하게 작성하세요."""
         
@@ -233,17 +234,21 @@ reason은 50자 이내로 간결하게 작성하세요."""
         # 최종 위치 키워드 결정
         final_location = analysis_result.location_keyword or resolved_location
         
+        # 음식 키워드 기본값 설정 (없으면 "음식점")
+        final_food = analysis_result.food_keyword or "음식점"
+        
         # 검색 쿼리 생성
         search_query_parts = []
         if final_location:
             search_query_parts.append(final_location)
-        if analysis_result.food_keyword:
-            search_query_parts.append(analysis_result.food_keyword)
+        search_query_parts.append(final_food)  # 음식 키워드는 항상 포함 (기본값 있음)
         
-        search_query = " ".join(search_query_parts) if search_query_parts else user_query
+        search_query = " ".join(search_query_parts)
         state["search_query"] = search_query
         
         logger.info(f"최종 검색 쿼리: {search_query}")
+        logger.info(f"  - 위치: {final_location or '(좌표 기반)'}")
+        logger.info(f"  - 음식: {final_food}{' (기본값)' if not analysis_result.food_keyword else ''}")
         logger.info("=" * 60)
         
         # 스텝 정보 기록
