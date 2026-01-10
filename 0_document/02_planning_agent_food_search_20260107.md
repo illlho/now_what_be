@@ -2,7 +2,7 @@
 
 **작성일**: 2026-01-07
 **작성자**: AI Agent + 사용자
-**버전**: 0.3.1 (3단계 개선 완료)
+**버전**: 0.4 (4단계 완료)
 **문서 유형**: AI Agent Service 기획
 
 > ⚠️ **중요**: 이 문서는 단순 챗봇/자동화가 아닌, 자율 판단·도구 선택·반복 개선이 가능한 **AI Agent Service** 기획서입니다.
@@ -13,7 +13,7 @@
 - [x] 1단계: 핵심 파악 및 Agent 필요성 검증
 - [x] 2단계: Agent 핵심 능력 및 MVP 정의
 - [x] 3단계: Agent 상태 및 판단 로직 설계
-- [ ] 4단계: Agent 오케스트레이션 및 도구 설계
+- [x] 4단계: Agent 오케스트레이션 및 도구 설계
 - [ ] 5단계: Agent 실패 시나리오 및 안전장치
 - [ ] 6단계: 개인화 및 추가 의견 수렴
 - [ ] 7단계: 종합 정리 및 Agent 검증
@@ -978,13 +978,213 @@ else:
 
 ---
 
-## 다음 단계 예정
+---
 
-**4단계**: Agent 오케스트레이션 및 도구 설계
-- LangGraph 노드 정의
-- 조건부 엣지 설계
-- 도구 목록 및 사용 조건
-- 기술 스택 결정
+## 4. Agent 오케스트레이션 및 도구 설계
+
+### 4.1 기술 스택 결정
+
+**오케스트레이션 프레임워크**: LangGraph **1.0.2** (최신 버전)
+- Python 기반
+- 상태 기반 워크플로우 관리
+- 조건부 분기 및 순환 구조 지원
+
+**LLM**: OpenAI GPT-4o-mini
+- 구조화된 출력 (Pydantic 모델)
+- 비용 효율성
+
+**크롤링**: httpx (비동기), BeautifulSoup4
+**지도 API**: 네이버 지도 API
+**역지오코딩**: Kakao Local API
+
+### 4.2 LangGraph 노드 구조
+
+#### 전체 노드 목록 (9개)
+
+| 번호 | 노드명 | 역할 | 단일 책임 |
+|------|--------|------|-----------|
+| 1 | `validate_input_node` | 사용자 입력 검증 | 맛집 검색 관련 여부 판단, 기본값 보완 |
+| 2 | `search_map_node` | 네이버 지도 검색 | 지도 API 호출, 장소 목록 수집 |
+| 3 | `crawl_blogs_node` | 블로그 크롤링 | 장소별 블로그 링크 수집 |
+| 4 | `evaluate_progress_node` | 중간 평가 및 의사결정 | 통과 장소 개수 확인, 재검색 필요 여부 판단 |
+| 5 | `assess_relevance_node` | 연관성 평가 | 블로그-키워드 연관성 판단 (통과/미달) |
+| 6 | `analyze_specialty_node` | 특색 파악 | 메뉴/요소 언급 비중 분석 |
+| 7 | `calculate_scores_node` | 점수 계산 | 5개 항목 점수 산정, 가중치 합산 |
+| 8 | `generate_report_node` | 최종 보고서 생성 | 비교표 작성, 제외 장소 정보 포함 |
+| 9 | `end_node` | 종료 | 워크플로우 완료 처리 |
+
+**설계 원칙**: 단일 책임 원칙 (SRP)
+- 각 노드는 하나의 명확한 역할만 수행
+- 상태 관리는 `WorkflowState`에서 통합
+- 확장 시 노드 분리 가능 (예: `crawl_blogs_node` → 여러 크롤링 노드)
+
+### 4.3 조건부 엣지 설계
+
+#### 1. `validate_input_node` → 분기
+
+| 조건 | 다음 노드 |
+|------|-----------|
+| ✅ 맛집 검색 관련 (위치 없음 → 좌표 사용, 음식 없음 → "음식점" 설정) | `search_map_node` |
+| ❌ 완전 무관 (예: "날씨 어때?", "주식 시세") | `end_node` |
+
+**판단 기준**:
+- 맛집/음식/장소 키워드 존재 → 통과
+- 위치 키워드 없음 → 좌표 기반 진행 (기본값 보완)
+- 음식 키워드 없음 → "음식점"으로 설정 (기본값 보완)
+- 완전 무관 → 종료
+
+#### 2. `search_map_node` → 분기
+
+| 조건 | 다음 노드 | 상태 변경 |
+|------|-----------|-----------|
+| 결과 ≥ 3개 | `crawl_blogs_node` | - |
+| 결과 < 3개, `search_attempt < 2` | `search_map_node` (재검색) | `search_attempt++`, `expanded_to_depth2 = True` |
+| 결과 < 3개, `search_attempt ≥ 2` | `crawl_blogs_node` | - (가능한 개수로 진행) |
+
+**재검색 전략**:
+- 위치 확장: `depth_3 (동)` → `depth_2 (시/군/구)`
+- 예: "가능동 삼겹살" → "의정부 삼겹살"
+- 최대 1회 재검색
+
+#### 3. `crawl_blogs_node` → 분기
+
+| 조건 | 다음 노드 |
+|------|-----------|
+| 모든 장소 크롤링 완료 | `assess_relevance_node` |
+| 크롤링 중 | (내부 순환, 다음 장소로) |
+
+**크롤링 기준**:
+- 장소당 **최소 5개** 블로그 목표
+- 네이버 지도 리뷰 탭에서 **1회 수집 시도**
+- 부족해도 추가 검색 없음
+
+#### 4. `assess_relevance_node` → 분기
+
+| 조건 | 다음 노드 |
+|------|-----------|
+| 평가 완료 | `evaluate_progress_node` |
+
+**연관성 평가 기준**:
+- 블로그당 키워드 **2회 이상** 언급한 블로그가 **1개 이상**
+- 해당 음식점 리뷰여야 함
+- 문맥상 적절해야 함
+
+#### 5. `evaluate_progress_node` → 분기 (핵심 의사결정)
+
+| 조건 | 다음 노드 | 상태 변경 |
+|------|-----------|-----------|
+| 통과 장소 ≥ 3개 | `analyze_specialty_node` | - |
+| 통과 < 3개, `total_places < 7`, `evaluation_round < 2` | `search_map_node` | `evaluation_round++`, `new_places_indices` 설정 |
+| 통과 < 3개, `total_places ≥ 7` 또는 `evaluation_round ≥ 2` | `analyze_specialty_node` | - (있는 장소로 진행) |
+
+**재검색 로직**:
+- 초기 5개 장소에서 통과 < 3개 → **+2개 추가 검색** (총 7개)
+- 새 2개만 `crawl_blogs_node` → `assess_relevance_node` 재평가
+- 최대 1회 재시도 (`evaluation_round < 2`)
+
+#### 6. 이후 노드 (순차 실행)
+
+```
+analyze_specialty_node
+  ↓
+calculate_scores_node
+  ↓
+generate_report_node
+  ↓
+end_node
+```
+
+### 4.4 상태 관리 필드 추가
+
+```python
+class WorkflowState(TypedDict, total=False):
+    # 기존 필드 (3단계에서 정의)
+    all_places: List[Dict[str, Any]]
+    user_query: str
+    location_keyword: str
+    food_keyword: str
+    # ...
+    
+    # 4단계 추가 필드
+    # 검색 재시도 관리
+    search_attempt: int  # 1, 2
+    search_expanded_to_depth2: bool  # depth_3 → depth_2 확장 여부
+    
+    # 평가 재시도 관리
+    evaluation_round: int  # 1, 2
+    total_places: int  # 총 장소 수
+    passed_places: int  # 통과 장소 수
+    
+    # 크롤링 타겟 관리
+    new_places_indices: List[int]  # 새로 추가된 장소만 크롤링
+    
+    # 노드 실행 기록
+    executed_nodes: List[str]
+```
+
+### 4.5 도구 목록 및 사용 조건
+
+| 도구 | 사용 노드 | 조건 | 역할 |
+|------|-----------|------|------|
+| LLM (OpenAI) | `validate_input_node` | 항상 | 입력 검증, 키워드 추출 |
+| LLM | `assess_relevance_node` | 항상 | 연관성 평가 |
+| LLM | `analyze_specialty_node` | 통과 장소 1개 이상 | 특색 파악 |
+| 네이버 지도 API | `search_map_node` | 항상 | 장소 검색 |
+| Kakao Local API | `validate_input_node` | 좌표 존재 + 위치 키워드 없음 | 역지오코딩 |
+| 크롤링 (httpx) | `crawl_blogs_node` | 항상 | 블로그 수집 |
+
+### 4.6 워크플로우 다이어그램
+
+```
+[사용자 입력]
+    ↓
+validate_input_node
+    ↓ (맛집 관련)          ↓ (무관)
+    ↓                   end_node
+    ↓
+search_map_node (1차)
+    ↓ (≥3개)               ↓ (<3개, attempt<2)
+    ↓                      ↓ (위치 확장)
+    ↓                   search_map_node (2차)
+    ↓                      ↓
+    └──────────────────────┘
+    ↓
+crawl_blogs_node
+  (장소별 5개 블로그 수집)
+    ↓
+assess_relevance_node
+  (장소별 연관성 평가)
+    ↓
+evaluate_progress_node
+    ↓ (통과≥3)             ↓ (통과<3, total<7, round<2)
+    ↓                      ↓
+    ↓                   search_map_node (+2개)
+    ↓                      ↓
+    ↓                   crawl_blogs_node (새 2개만)
+    ↓                      ↓
+    ↓                   assess_relevance_node (새 2개만)
+    ↓                      ↓
+    ↓                   evaluate_progress_node (round++)
+    └──────────────────────┘
+    ↓
+analyze_specialty_node
+    ↓
+calculate_scores_node
+    ↓
+generate_report_node
+    ↓
+end_node
+```
+
+### 4.7 무한 루프 방지
+
+| 순환 지점 | 최대 반복 | 제한 메커니즘 |
+|-----------|-----------|---------------|
+| `search_map_node` | 2회 | `search_attempt < 2` |
+| `evaluate_progress_node` → 재검색 | 1회 | `evaluation_round < 2` |
+| `crawl_blogs_node` (장소별) | 1회 | 장소 인덱스 증가 후 종료 |
+
+**전역 타임아웃**: 10분 (선택적 구현)
 
 ---
 
@@ -996,4 +1196,13 @@ else:
 | 2026-01-07 | 0.2 | 2단계 완료: Agent 핵심 능력 및 MVP 정의 | AI Agent + 사용자 |
 | 2026-01-07 | 0.3 | 3단계 완료: Agent 상태 및 판단 로직 설계 | AI Agent + 사용자 |
 | 2026-01-07 | 0.3.1 | 3단계 개선: Agent다움 강화 (자율 판단 → 행동 반영, 재검색 전략 명확화) | AI Agent + 사용자 |
+| 2026-01-10 | 0.4 | 4단계 완료: Agent 오케스트레이션 및 도구 설계 (LangGraph 1.0.2, 9개 노드, 조건부 엣지) | AI Agent + 사용자 |
+
+## 다음 단계 예정
+
+**5단계**: Agent 실패 시나리오 및 안전장치
+- 예외 상황 목록
+- 각 노드별 실패 처리
+- 비용/시간 제한
+- 사용자 안내 메시지
 
